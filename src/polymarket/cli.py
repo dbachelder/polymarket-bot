@@ -346,18 +346,37 @@ def cmd_microstructure(args: argparse.Namespace) -> None:
 
 
 def cmd_binance_collect(args: argparse.Namespace) -> None:
-    """Collect Binance BTC market data (REST API single snapshot)."""
+    """Collect BTC market data (REST API single snapshot) with provider fallback.
+
+    Tries Binance endpoints first (with rotation on HTTP 451), then falls back to
+    Coinbase and Kraken. Reports which provider was used.
+    """
+    import logging
     from pathlib import Path
 
     from .binance_collector import collect_snapshot_rest
 
+    # Set up logging to see provider info
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
     out_dir = Path(args.out)
+    base_urls = args.base_url if args.base_url else None
+
     out_path = collect_snapshot_rest(
         out_dir=out_dir,
         symbol=args.symbol,
         kline_intervals=args.intervals,
+        base_urls=base_urls,
     )
-    print(str(out_path))
+
+    # Read the snapshot to report which provider was used
+    try:
+        snapshot = json.loads(out_path.read_text())
+        provider = snapshot.get("provider", "unknown")
+        print(f"Provider: {provider}")
+        print(f"Output: {out_path}")
+    except (json.JSONDecodeError, FileNotFoundError):
+        print(str(out_path))
 
 
 def cmd_binance_loop(args: argparse.Namespace) -> None:
@@ -397,35 +416,6 @@ def cmd_binance_features(args: argparse.Namespace) -> None:
 
     save_aligned_features(aligned, out_path)
     print(f"Aligned {len(aligned)} records to {out_path}")
-
-
-def cmd_dataset_join(args: argparse.Namespace) -> None:
-    """Build aligned dataset and compute lead/lag correlations."""
-    from pathlib import Path
-
-    from .dataset_join import build_aligned_dataset, save_report
-
-    polymarket_dir = Path(args.polymarket_dir)
-    binance_dir = Path(args.binance_dir)
-    out_path = Path(args.out)
-
-    report = build_aligned_dataset(
-        polymarket_data_dir=polymarket_dir,
-        binance_data_dir=binance_dir,
-        hours=float(args.hours),
-        tolerance_seconds=float(args.tolerance),
-    )
-
-    text_path = out_path.with_suffix(".txt") if args.text else None
-    json_path, txt_path = save_report(report, out_path, text_path)
-
-    if args.format == "json":
-        print(json.dumps(report.to_dict(), indent=2))
-    else:
-        print(report.to_text())
-        print(f"\nJSON report saved: {json_path}")
-        if txt_path:
-            print(f"Text report saved: {txt_path}")
 
 
 def cmd_health_check(args: argparse.Namespace) -> None:
@@ -748,10 +738,19 @@ def main() -> None:
     ms.set_defaults(func=cmd_microstructure)
 
     # Binance commands
-    bc = sub.add_parser("binance-collect", help="Collect Binance BTC market data (single snapshot)")
+    bc = sub.add_parser(
+        "binance-collect",
+        help="Collect BTC market data (single snapshot) with fallback providers",
+    )
     bc.add_argument("--out", default="data/binance", help="Output directory")
     bc.add_argument("--symbol", default="BTCUSDT", help="Trading pair symbol (default: BTCUSDT)")
     bc.add_argument("--intervals", nargs="+", default=["1m", "5m"], help="Kline intervals to fetch")
+    bc.add_argument(
+        "--base-url",
+        nargs="+",
+        default=None,
+        help="Override Binance base URL(s) to try first (default: auto-rotate)",
+    )
     bc.set_defaults(func=cmd_binance_collect)
 
     bcl = sub.add_parser("binance-loop", help="Continuously collect Binance data via WebSocket")
@@ -775,33 +774,6 @@ def main() -> None:
     bf.add_argument("--out", default="data/aligned_features.json", help="Output file")
     bf.add_argument("--tolerance", type=float, default=1.0, help="Alignment tolerance in seconds")
     bf.set_defaults(func=cmd_binance_features)
-
-    dj = sub.add_parser(
-        "dataset-join",
-        help="Build aligned dataset and compute lead/lag correlations (BTC vs PM 15m)",
-    )
-    dj.add_argument(
-        "--polymarket-dir", default="data", help="Polymarket data directory (default: data)"
-    )
-    dj.add_argument(
-        "--binance-dir", default="data/binance", help="Binance data directory (default: data/binance)"
-    )
-    dj.add_argument(
-        "--hours", type=float, default=24.0, help="Hours of data to analyze (default: 24)"
-    )
-    dj.add_argument(
-        "--tolerance", type=float, default=5.0, help="Alignment tolerance in seconds (default: 5)"
-    )
-    dj.add_argument(
-        "--out", default="data/join_report.json", help="Output JSON file (default: data/join_report.json)"
-    )
-    dj.add_argument(
-        "--text", action="store_true", help="Also save human-readable text report"
-    )
-    dj.add_argument(
-        "--format", choices=["json", "human"], default="human", help="Console output format"
-    )
-    dj.set_defaults(func=cmd_dataset_join)
 
     hc = sub.add_parser("health-check", help="Check collector health and staleness SLA")
     hc.add_argument("--data-dir", default="data", help="Data directory containing snapshots")

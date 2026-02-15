@@ -1,6 +1,7 @@
 """Binance public market data collector for BTC spot trading.
 
 Provides WebSocket and REST API collectors for aggregated trades and klines (candlesticks).
+Also supports fallback providers (Coinbase, Kraken) when Binance is unavailable (HTTP 451).
 All timestamps are UTC. Data is written to JSON/CSV for time-aligned analysis.
 """
 
@@ -23,6 +24,9 @@ import httpx
 import websockets
 from websockets.exceptions import ConnectionClosed, ConnectionClosedOK
 
+from polymarket.marketdata import AggTrade, Kline, Snapshot
+from polymarket.marketdata.auto import AutoProvider, create_provider
+
 logger = logging.getLogger(__name__)
 
 # Binance public API endpoints (no authentication required)
@@ -41,101 +45,6 @@ BINANCE_WS_BASE = "wss://stream.binance.com:9443/ws"
 
 # Default symbol for BTC spot (USDT pair)
 DEFAULT_SYMBOL = "BTCUSDT"
-
-
-@dataclass(frozen=True)
-class AggTrade:
-    """Aggregated trade from Binance."""
-
-    timestamp_ms: int
-    price: float
-    quantity: float
-    is_buyer_maker: bool
-    trade_id: int
-    timestamp: str = field(init=False)
-
-    def __post_init__(self):
-        # Use object.__setattr__ since dataclass is frozen
-        ts = datetime.fromtimestamp(self.timestamp_ms / 1000, tz=UTC).isoformat()
-        object.__setattr__(self, "timestamp", ts)
-
-    @property
-    def signed_volume(self) -> float:
-        """Signed volume: positive for sell aggressor (buyer maker), negative for buy aggressor."""
-        return -self.quantity if self.is_buyer_maker else self.quantity
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "timestamp": self.timestamp,
-            "timestamp_ms": self.timestamp_ms,
-            "price": self.price,
-            "quantity": self.quantity,
-            "is_buyer_maker": self.is_buyer_maker,
-            "trade_id": self.trade_id,
-            "signed_volume": self.signed_volume,
-        }
-
-
-@dataclass(frozen=True)
-class Kline:
-    """Kline (candlestick) data from Binance."""
-
-    open_time_ms: int
-    close_time_ms: int
-    open_price: float
-    high_price: float
-    low_price: float
-    close_price: float
-    volume: float
-    quote_volume: float
-    trades_count: int
-    taker_buy_volume: float
-    taker_buy_quote_volume: float
-    open_time: str = field(init=False)
-    close_time: str = field(init=False)
-
-    def __post_init__(self):
-        open_ts = datetime.fromtimestamp(self.open_time_ms / 1000, tz=UTC).isoformat()
-        close_ts = datetime.fromtimestamp(self.close_time_ms / 1000, tz=UTC).isoformat()
-        object.__setattr__(self, "open_time", open_ts)
-        object.__setattr__(self, "close_time", close_ts)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "open_time": self.open_time,
-            "close_time": self.close_time,
-            "open_time_ms": self.open_time_ms,
-            "close_time_ms": self.close_time_ms,
-            "open_price": self.open_price,
-            "high_price": self.high_price,
-            "low_price": self.low_price,
-            "close_price": self.close_price,
-            "volume": self.volume,
-            "quote_volume": self.quote_volume,
-            "trades_count": self.trades_count,
-            "taker_buy_volume": self.taker_buy_volume,
-            "taker_buy_quote_volume": self.taker_buy_quote_volume,
-        }
-
-
-@dataclass
-class Snapshot:
-    """Time-aligned snapshot of Binance market data."""
-
-    timestamp: str
-    timestamp_ms: int
-    symbol: str
-    trades: list[AggTrade] = field(default_factory=list)
-    klines: dict[str, Kline | None] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "timestamp": self.timestamp,
-            "timestamp_ms": self.timestamp_ms,
-            "symbol": self.symbol,
-            "trades": [t.to_dict() for t in self.trades],
-            "klines": {k: (v.to_dict() if v else None) for k, v in self.klines.items()},
-        }
 
 
 class BinanceRestClient:
@@ -445,6 +354,7 @@ class BinanceWebSocketCollector:
             timestamp=now.isoformat(),
             timestamp_ms=int(now.timestamp() * 1000),
             symbol=self.symbol.upper(),
+            provider="binance",  # WebSocket always uses Binance
             trades=list(self.trade_buffer),
             klines=dict(self.klines),
         )
@@ -494,16 +404,24 @@ def collect_snapshot_rest(
     out_dir: Path,
     symbol: str = DEFAULT_SYMBOL,
     kline_intervals: list[str] | None = None,
+    base_urls: list[str] | str | None = None,
 ) -> Path:
-    """Collect a single snapshot using REST API.
+    """Collect a single snapshot using REST API with fallback providers.
+
+    Tries Binance endpoints first (with rotation on HTTP 451), then falls back to
+    Coinbase and Kraken if all Binance endpoints fail.
 
     Args:
         out_dir: Directory to write output files
         symbol: Trading pair symbol
         kline_intervals: Kline intervals to fetch
+        base_urls: Optional Binance base URL(s) to try first (env overrides respected)
 
     Returns:
         Path to the written JSON file
+
+    Raises:
+        ProviderUnavailableError: If all providers fail
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     kline_intervals = kline_intervals or ["1m", "5m"]
@@ -511,45 +429,52 @@ def collect_snapshot_rest(
     now = datetime.now(UTC)
     ts_str = now.strftime("%Y%m%dT%H%M%SZ")
 
-    with BinanceRestClient() as client:
-        # Fetch recent trades (last 1000)
-        end_time = int(now.timestamp() * 1000)
-        start_time = end_time - (60 * 1000)  # Last 60 seconds
-        trades = client.get_agg_trades(
-            symbol=symbol, start_time_ms=start_time, end_time_ms=end_time, limit=1000
+    # Use auto provider with fallback (Binance -> Coinbase -> Kraken)
+    # Pass base_urls to prioritize specific Binance endpoints
+    binance_base = base_urls[0] if isinstance(base_urls, list) else base_urls
+    provider = create_provider("auto", binance_base_url=binance_base, timeout=30.0)
+
+    try:
+        snapshot = provider.get_snapshot(
+            symbol=symbol,
+            kline_intervals=kline_intervals,
+            trade_lookback_seconds=60,
         )
 
-        # Fetch klines for each interval
-        klines: dict[str, Kline | None] = {}
-        for interval in kline_intervals:
-            try:
-                kl = client.get_klines(symbol=symbol, interval=interval, limit=10)
-                klines[interval] = kl[-1] if kl else None
-            except httpx.HTTPError as e:
-                logger.warning("Failed to fetch klines for %s: %s", interval, e)
-                klines[interval] = None
+        # Log which provider succeeded
+        logger.info("Collected snapshot from provider: %s", snapshot.provider)
 
-    snapshot = Snapshot(
-        timestamp=now.isoformat(),
-        timestamp_ms=int(now.timestamp() * 1000),
-        symbol=symbol,
-        trades=trades,
-        klines=klines,
-    )
+        # Write JSON snapshot
+        out_path = out_dir / f"{snapshot.provider}_{symbol.lower()}_{ts_str}.json"
+        out_path.write_text(json.dumps(snapshot.to_dict(), indent=2, sort_keys=True))
 
-    out_path = out_dir / f"binance_{symbol.lower()}_{ts_str}.json"
-    out_path.write_text(json.dumps(snapshot.to_dict(), indent=2, sort_keys=True))
+        # Also write trades to CSV for easy analysis
+        if snapshot.trades:
+            csv_path = out_dir / f"{snapshot.provider}_{symbol.lower()}_trades_{ts_str}.csv"
+            with csv_path.open("w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=snapshot.trades[0].to_dict().keys())
+                writer.writeheader()
+                for trade in snapshot.trades:
+                    writer.writerow(trade.to_dict())
 
-    # Also write trades to CSV for easy analysis
-    csv_path = out_dir / f"binance_{symbol.lower()}_trades_{ts_str}.csv"
-    with csv_path.open("w", newline="") as f:
-        if trades:
-            writer = csv.DictWriter(f, fieldnames=trades[0].to_dict().keys())
-            writer.writeheader()
-            for trade in trades:
-                writer.writerow(trade.to_dict())
+        # Write latest pointer with provider info
+        latest = out_dir / f"latest_{symbol.lower()}.json"
+        latest.write_text(
+            json.dumps(
+                {
+                    "path": str(out_path),
+                    "generated_at": datetime.now(UTC).isoformat(),
+                    "timestamp_ms": snapshot.timestamp_ms,
+                    "provider": snapshot.provider,
+                },
+                indent=2,
+            )
+        )
 
-    return out_path
+        return out_path
+
+    finally:
+        provider.close()
 
 
 async def collect_loop_ws(
@@ -580,10 +505,10 @@ async def collect_loop_ws(
         ts_str = datetime.fromtimestamp(snapshot.timestamp_ms / 1000, tz=UTC).strftime(
             "%Y%m%dT%H%M%SZ"
         )
-        out_path = out_dir / f"binance_{symbol.lower()}_{ts_str}.json"
+        out_path = out_dir / f"{snapshot.provider}_{symbol.lower()}_{ts_str}.json"
         out_path.write_text(json.dumps(snapshot.to_dict(), indent=2, sort_keys=True))
 
-        # Write latest pointer
+        # Write latest pointer with provider info
         latest = out_dir / f"latest_{symbol.lower()}.json"
         latest.write_text(
             json.dumps(
@@ -591,6 +516,7 @@ async def collect_loop_ws(
                     "path": str(out_path),
                     "generated_at": datetime.now(UTC).isoformat(),
                     "timestamp_ms": snapshot.timestamp_ms,
+                    "provider": snapshot.provider,
                 }
             )
         )
@@ -613,12 +539,18 @@ async def collect_loop_ws(
 
 
 def _prune_old_files(out_dir: Path, symbol: str, retention_hours: float) -> int:
-    """Delete files older than retention_hours."""
+    """Delete files older than retention_hours.
+
+    Matches files with pattern: {provider}_{symbol}_{timestamp}.json
+    where provider can be binance, coinbase, kraken, etc.
+    """
     cutoff = datetime.now(UTC) - timedelta(hours=retention_hours)
     deleted = 0
-    prefix = f"binance_{symbol}_"
 
-    for p in out_dir.glob(f"{prefix}*.json"):
+    # Match any provider prefix followed by symbol and timestamp
+    pattern = f"*_{symbol}_*.json"
+
+    for p in out_dir.glob(pattern):
         # Skip "latest" files
         if "latest" in p.name:
             continue

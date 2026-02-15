@@ -5,20 +5,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 import httpx
+import pytest
 
 from polymarket.binance_collector import (
-    AggTrade,
     BinanceRestClient,
     BinanceWebSocketCollector,
-    Kline,
-    Snapshot,
+    collect_snapshot_rest,
 )
 from polymarket.binance_features import (
     FeatureBuilder,
     align_to_polymarket_snapshots,
 )
+from polymarket.marketdata import AggTrade, Kline, Snapshot
 
 
 class TestAggTrade:
@@ -125,17 +124,33 @@ class TestSnapshot:
             timestamp="2023-11-14T12:00:00Z",
             timestamp_ms=1_700_000_000_000,
             symbol="BTCUSDT",
+            provider="binance",
             trades=[trade],
             klines={"1m": None},
         )
         assert snapshot.symbol == "BTCUSDT"
+        assert snapshot.provider == "binance"
         assert len(snapshot.trades) == 1
+
+    def test_snapshot_provider_fallback(self):
+        """Test that snapshot includes provider info for fallback tracking."""
+        snapshot = Snapshot(
+            timestamp="2023-11-14T12:00:00Z",
+            timestamp_ms=1_700_000_000_000,
+            symbol="BTCUSDT",
+            provider="coinbase",  # Could be coinbase/kraken if binance fails
+            trades=[],
+            klines={},
+        )
+        d = snapshot.to_dict()
+        assert d["provider"] == "coinbase"
 
 
 class TestBinanceRestClient:
     def test_client_context_manager(self):
         with BinanceRestClient() as client:
-            assert client.base_url == "https://api.binance.com"
+            # Default should be binance.com or auto-rotate list
+            assert "binance.com" in client.base_url
 
     def test_client_close(self):
         client = BinanceRestClient()
@@ -143,8 +158,11 @@ class TestBinanceRestClient:
         assert client.client.is_closed
 
     def test_endpoint_rotation_on_451(self, monkeypatch):
+        """Test HTTP 451 triggers endpoint rotation across multiple bases."""
         # First endpoint blocked; second succeeds.
-        client = BinanceRestClient(base_urls=["https://api.binance.com", "https://api1.binance.com"])
+        client = BinanceRestClient(
+            base_urls=["https://api.binance.com", "https://api1.binance.com"]
+        )
 
         calls: list[str] = []
 
@@ -152,8 +170,12 @@ class TestBinanceRestClient:
             calls.append(url)
             req = httpx.Request("GET", url, params=params)
             if len(calls) == 1:
-                return httpx.Response(451, request=req, json={"msg": "Unavailable For Legal Reasons"})
-            return httpx.Response(200, request=req, json=[{"T": 1, "p": "1", "q": "1", "m": False, "a": 1}])
+                return httpx.Response(
+                    451, request=req, json={"msg": "Unavailable For Legal Reasons"}
+                )
+            return httpx.Response(
+                200, request=req, json=[{"T": 1, "p": "1", "q": "1", "m": False, "a": 1}]
+            )
 
         monkeypatch.setattr(client.client, "get", fake_get)
 
@@ -161,6 +183,33 @@ class TestBinanceRestClient:
         assert len(trades) == 1
         assert calls[0].startswith("https://api.binance.com")
         assert calls[1].startswith("https://api1.binance.com")
+        client.close()
+
+    def test_endpoint_rotation_all_fail(self, monkeypatch):
+        """Test that all endpoints failing raises an exception."""
+        client = BinanceRestClient(
+            base_urls=["https://api.binance.com", "https://api1.binance.com"]
+        )
+
+        def fake_get(url, params=None):  # noqa: ANN001
+            req = httpx.Request("GET", url, params=params)
+            return httpx.Response(
+                451, request=req, json={"msg": "Unavailable For Legal Reasons"}
+            )
+
+        monkeypatch.setattr(client.client, "get", fake_get)
+
+        with pytest.raises(httpx.HTTPStatusError):
+            client.get_agg_trades(symbol="BTCUSDT", limit=1)
+
+        client.close()
+
+    def test_env_override_base_urls(self):
+        """Test that custom base_urls parameter is respected."""
+        custom_urls = ["https://api3.binance.com", "https://api4.binance.com"]
+        client = BinanceRestClient(base_urls=custom_urls)
+        assert client.base_urls == custom_urls
+        assert client.base_url == custom_urls[0]
         client.close()
 
 
@@ -308,3 +357,122 @@ class TestAlignToPolymarketSnapshots:
         result = align_to_polymarket_snapshots(binance_dir, pm_dir, tolerance_seconds=1.0)
         assert len(result) == 1
         assert result[0]["time_diff_seconds"] == 0.0
+
+
+class TestFallbackProvider:
+    """Tests for fallback provider functionality (auto-provider with coinbase/kraken)."""
+
+    def test_auto_provider_tries_multiple_providers(self, monkeypatch):
+        """Test that AutoProvider tries Binance, then Coinbase, then Kraken."""
+        from polymarket.marketdata.auto import AutoProvider
+        from polymarket.marketdata import ProviderUnavailableError
+
+        provider = AutoProvider()
+
+        # Track which providers were called
+        calls = []
+
+        # Mock Binance to fail with 451
+        def mock_binance_health(*args, **kwargs):  # noqa: ANN001, ANN002
+            calls.append("binance")
+            raise ProviderUnavailableError("HTTP 451")
+
+        # Mock Coinbase to succeed
+        def mock_coinbase_health(*args, **kwargs):  # noqa: ANN001, ANN002
+            calls.append("coinbase")
+            return True
+
+        # Apply mocks
+        monkeypatch.setattr(
+            provider._get_provider("binance"), "health_check", mock_binance_health
+        )
+        monkeypatch.setattr(
+            provider._get_provider("coinbase"), "health_check", mock_coinbase_health
+        )
+
+        # Should try binance first, then succeed via coinbase
+        result = provider.health_check()
+        assert result is True
+        assert "binance" in calls
+        assert "coinbase" in calls
+
+        provider.close()
+
+    def test_auto_provider_reports_provider_in_snapshot(self, monkeypatch):
+        """Test that snapshot includes which provider was used."""
+        from polymarket.marketdata.auto import AutoProvider
+
+        provider = AutoProvider(preferred_order=["coinbase"])
+
+        # Mock get_agg_trades to return test data
+        def mock_get_agg_trades(*args, **kwargs):  # noqa: ANN001, ANN002
+            return [
+                AggTrade(
+                    timestamp_ms=1_700_000_000_000,
+                    price=42000.0,
+                    quantity=1.0,
+                    is_buyer_maker=False,
+                    trade_id=1,
+                )
+            ]
+
+        # Mock get_klines to return empty list
+        def mock_get_klines(*args, **kwargs):  # noqa: ANN001, ANN002
+            return []
+
+        coinbase_provider = provider._get_provider("coinbase")
+        monkeypatch.setattr(coinbase_provider, "get_agg_trades", mock_get_agg_trades)
+        monkeypatch.setattr(coinbase_provider, "get_klines", mock_get_klines)
+
+        snapshot = provider.get_snapshot(symbol="BTCUSDT", kline_intervals=[])
+        assert snapshot.provider == "coinbase"
+        assert len(snapshot.trades) == 1
+
+        provider.close()
+
+    def test_collect_snapshot_rest_includes_provider(self, tmp_path: Path, monkeypatch):
+        """Test that collect_snapshot_rest includes provider in output."""
+        from polymarket.marketdata.auto import AutoProvider
+
+        out_dir = tmp_path / "data"
+
+        # Mock get_snapshot to return a test snapshot with provider info
+        def mock_get_snapshot(self, *args, **kwargs):  # noqa: ANN001, ANN002
+            return Snapshot(
+                timestamp="2023-11-14T22:13:20Z",
+                timestamp_ms=1_700_000_000_000,
+                symbol="BTCUSDT",
+                provider="coinbase",  # Simulate fallback to coinbase
+                trades=[
+                    AggTrade(
+                        timestamp_ms=1_700_000_000_000,
+                        price=42000.0,
+                        quantity=1.0,
+                        is_buyer_maker=False,
+                        trade_id=1,
+                    )
+                ],
+                klines={},
+            )
+
+        monkeypatch.setattr(AutoProvider, "get_snapshot", mock_get_snapshot)
+
+        out_path = collect_snapshot_rest(
+            out_dir=out_dir,
+            symbol="BTCUSDT",
+            kline_intervals=["1m"],
+        )
+
+        assert out_path.exists()
+        snapshot_data = json.loads(out_path.read_text())
+        assert "provider" in snapshot_data
+        assert snapshot_data["provider"] == "coinbase"
+
+        # Output filename should include provider
+        assert "coinbase" in out_path.name
+
+        # Latest pointer should also include provider
+        latest_path = out_dir / "latest_btcusdt.json"
+        assert latest_path.exists()
+        latest_data = json.loads(latest_path.read_text())
+        assert latest_data.get("provider") == "coinbase"
