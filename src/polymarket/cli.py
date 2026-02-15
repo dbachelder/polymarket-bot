@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import UTC, datetime
 
-from . import gamma, clob
+from . import clob
 
 
 def _print(obj: object) -> None:
@@ -41,6 +40,16 @@ def cmd_collect_5m(args: argparse.Namespace) -> None:
     print(str(out))
 
 
+def cmd_universe_5m(args: argparse.Namespace) -> None:
+    from pathlib import Path
+
+    from .universe import build_universe, save_universe
+
+    data = build_universe(cross_check=args.cross_check)
+    out_path = save_universe(data, Path(args.out))
+    print(str(out_path))
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="polymarket")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -62,6 +71,11 @@ def main() -> None:
     pc = sub.add_parser("collect-5m", help="Snapshot /predictions/5M + CLOB orderbooks")
     pc.add_argument("--out", default="data")
     pc.set_defaults(func=cmd_collect_5m)
+
+    pu = sub.add_parser("universe-5m", help="Build normalized market universe from /predictions/5M")
+    pu.add_argument("--out", default="data/universe.json", help="Output JSON file path")
+    pu.add_argument("--cross-check", action="store_true", help="Verify against Gamma API")
+    pu.set_defaults(func=cmd_universe_5m)
 
     args = p.parse_args()
     args.func(args)
