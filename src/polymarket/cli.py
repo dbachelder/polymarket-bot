@@ -96,6 +96,65 @@ def cmd_collect_15m_loop(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_pnl_verify(args: argparse.Namespace) -> None:
+    """Verify PnL from fills data."""
+    from pathlib import Path
+
+    from .pnl import compute_pnl, load_fills_from_file, load_orderbooks_from_file
+
+    input_path = Path(args.input)
+    if not input_path.exists():
+        print(json.dumps({"error": f"Input file not found: {args.input}"}), file=__import__("sys").stderr)
+        raise SystemExit(1)
+
+    fills = load_fills_from_file(input_path)
+
+    # Load optional orderbooks for liquidation value
+    orderbooks = None
+    if args.books:
+        books_path = Path(args.books)
+        if books_path.exists():
+            orderbooks = load_orderbooks_from_file(books_path)
+
+    report = compute_pnl(fills, orderbooks=orderbooks)
+
+    # Output format
+    output = report.to_dict()
+
+    if args.format == "json":
+        print(json.dumps(output, indent=2))
+    else:
+        # Human-readable format
+        print("=" * 60)
+        print("PnL VERIFICATION REPORT")
+        print("=" * 60)
+        print(f"\nTotal Fills:      {output['summary']['total_fills']}")
+        print(f"Unique Tokens:    {output['summary']['unique_tokens']}")
+        print("\n--- PnL Breakdown ---")
+        print(f"Realized PnL:     ${output['pnl']['realized_pnl']:,.2f}")
+        print(f"Unrealized PnL:   ${output['pnl']['unrealized_pnl']:,.2f}")
+        print(f"Total Fees:       ${output['pnl']['total_fees']:,.2f}")
+        print(f"Net PnL:          ${output['pnl']['net_pnl']:,.2f}")
+        print("\n--- Liquidation Analysis ---")
+        print(f"Mark to Market:   ${output['liquidation']['mark_to_market']:,.2f}")
+        print(f"Liquidation Val:  ${output['liquidation']['liquidation_value']:,.2f}")
+        print(f"Discount:         ${output['liquidation']['liquidation_discount']:,.2f} ({output['liquidation']['discount_pct']:.1f}%)")
+
+        if output['positions']:
+            print(f"\n--- Open Positions ({len(output['positions'])}) ---")
+            for pos in output['positions'][:10]:  # Limit to 10
+                print(f"  {pos['token_id'][:40]}...")
+                print(f"    Size: {pos['net_size']:,.2f} @ ${pos['avg_cost_basis']:.3f}")
+                print(f"    Price: ${pos['current_price']:.3f} | Unrealized: ${pos['unrealized_pnl']:,.2f}")
+
+        if output['warnings']:
+            print("\n--- Warnings ---")
+            for warning in output['warnings']:
+                print(f"  ! {warning}")
+
+        print("\n" + "=" * 60)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="polymarket")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -140,6 +199,12 @@ def main() -> None:
     pc15l.add_argument("--max-backoff-seconds", type=float, default=60.0, help="Max backoff on errors")
     pc15l.add_argument("--retention-hours", type=float, default=None, help="Prune snapshots older than N hours")
     pc15l.set_defaults(func=cmd_collect_15m_loop)
+
+    pnl = sub.add_parser("pnl-verify", help="Verify PnL from fills data (debunk screenshots)")
+    pnl.add_argument("--input", required=True, help="Path to fills JSON file")
+    pnl.add_argument("--books", default=None, help="Path to orderbooks JSON for liquidation value")
+    pnl.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    pnl.set_defaults(func=cmd_pnl_verify)
 
     args = p.parse_args()
     args.func(args)
