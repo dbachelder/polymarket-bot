@@ -38,6 +38,18 @@ case "${1:-}" in
         shift
         $PYTHON -m polymarket.cli pnl-verify "$@"
         ;;
+    copytrade-loop)
+        shift
+        $PYTHON -m polymarket.cli copytrade-loop "$@"
+        ;;
+    copytrade-pnl)
+        shift
+        $PYTHON -m polymarket.cli copytrade-pnl "$@"
+        ;;
+    copytrade-collect)
+        shift
+        $PYTHON -m polymarket.cli copytrade-collect "$@"
+        ;;
     tests|test)
         shift
         $PYTHON -m pytest "$@"
@@ -101,6 +113,9 @@ case "${1:-}" in
         echo "  collect-15m-loop   Continuously collect 15m market snapshots"
         echo "  markets-15m        Fetch 15-minute crypto interval markets"
         echo "  pnl-verify         Verify PnL from fills data"
+        echo "  copytrade-loop     Run copytrade accounting loop (collect + daily PnL)"
+        echo "  copytrade-pnl      Run single PnL verification on copytrade fills"
+        echo "  copytrade-collect  Collect fills for a wallet (one-time)"
         echo "  tests              Run pytest test suite"
         echo "  health-check       Check collector health and staleness"
         echo ""
@@ -124,6 +139,8 @@ case "${1:-}" in
         echo "  $0 collect-15m-loop --out data --interval-seconds 60"
         echo "  $0 markets-15m --limit 20"
         echo "  $0 pnl-verify --input data/fills.json --books data/books.json"
+        echo "  $0 copytrade-loop --wallet 0x... --interval-seconds 300"
+        echo "  $0 copytrade-pnl --data-dir data/copytrade --snapshot data/latest_15m.json"
         exit 1
         ;;
 esac

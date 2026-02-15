@@ -25,8 +25,21 @@ from websockets.exceptions import ConnectionClosed, ConnectionClosedOK
 logger = logging.getLogger(__name__)
 
 # Binance public API endpoints (no authentication required)
-BINANCE_REST_BASE = "https://api.binance.com"
-BINANCE_WS_BASE = "wss://stream.binance.com:9443/ws"
+# Ordered by preference: US and Vision APIs first (avoid 451 in restricted regions)
+BINANCE_REST_BASE_URLS = [
+    "https://api.binance.us",
+    "https://data-api.binance.vision",
+    "https://api.binance.com",
+]
+BINANCE_WS_BASE_URLS = [
+    "wss://stream.binance.us:9443/ws",
+    "wss://data-stream.binance.vision/ws",
+    "wss://stream.binance.com:9443/ws",
+]
+
+# Backwards compatibility - default base
+BINANCE_REST_BASE = BINANCE_REST_BASE_URLS[0]
+BINANCE_WS_BASE = BINANCE_WS_BASE_URLS[0]
 
 # Default symbol for BTC spot (USDT pair)
 DEFAULT_SYMBOL = "BTCUSDT"
@@ -128,12 +141,55 @@ class Snapshot:
 
 
 class BinanceRestClient:
-    """REST API client for Binance public market data."""
+    """REST API client for Binance public market data with automatic failover."""
 
-    def __init__(self, base_url: str = BINANCE_REST_BASE, timeout: float = 30.0):
-        self.base_url = base_url
+    def __init__(
+        self,
+        base_urls: list[str] | str | None = None,
+        timeout: float = 30.0,
+    ):
+        """Initialize REST client with failover support.
+
+        Args:
+            base_urls: Single URL, list of URLs, or None for defaults.
+                      If list, tries each in order until one succeeds.
+            timeout: Request timeout in seconds.
+        """
+        if base_urls is None:
+            self.base_urls = list(BINANCE_REST_BASE_URLS)
+        elif isinstance(base_urls, str):
+            self.base_urls = [base_urls]
+        else:
+            self.base_urls = list(base_urls)
+
         self.timeout = timeout
+        self._unusable_bases: set[str] = set()
+        self._current_base_idx = 0
         self.client = httpx.Client(timeout=timeout, follow_redirects=True)
+
+    @property
+    def base_url(self) -> str:
+        """Current active base URL."""
+        return self._get_usable_base()
+
+    def _get_usable_base(self) -> str:
+        """Get the first usable base URL."""
+        for url in self.base_urls[self._current_base_idx :]:
+            if url not in self._unusable_bases:
+                return url
+        # If all marked unusable, reset and try again
+        self._unusable_bases.clear()
+        return self.base_urls[0]
+
+    def _mark_unusable(self, base_url: str) -> None:
+        """Mark a base URL as unusable (e.g., due to HTTP 451)."""
+        logger.warning("Marking base URL as unusable: %s", base_url)
+        self._unusable_bases.add(base_url)
+        # Find next usable index
+        for i, url in enumerate(self.base_urls):
+            if url == base_url:
+                self._current_base_idx = i + 1
+                break
 
     def close(self) -> None:
         self.client.close()
@@ -145,11 +201,43 @@ class BinanceRestClient:
         self.close()
 
     def _get(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Make a GET request to Binance API."""
-        url = f"{self.base_url}{endpoint}"
-        response = self.client.get(url, params=params)
-        response.raise_for_status()
-        return response.json()
+        """Make a GET request to Binance API with failover support."""
+        last_error: Exception | None = None
+
+        for base_url in self.base_urls:
+            if base_url in self._unusable_bases:
+                continue
+
+            url = f"{base_url}{endpoint}"
+            try:
+                response = self.client.get(url, params=params)
+
+                # Handle HTTP 451 (Unavailable For Legal Reasons) - mark as unusable
+                if response.status_code == 451:
+                    logger.warning(
+                        "HTTP 451 from %s - restricted location, trying next base",
+                        base_url,
+                    )
+                    self._mark_unusable(base_url)
+                    continue
+
+                response.raise_for_status()
+                return response.json()
+
+            except httpx.HTTPStatusError as e:
+                # Don't retry client errors (4xx) except 451 which we handled above
+                if 400 <= e.response.status_code < 500 and e.response.status_code != 451:
+                    raise
+                last_error = e
+                logger.warning("HTTP error from %s: %s", base_url, e)
+            except (httpx.RequestError, httpx.TimeoutException) as e:
+                last_error = e
+                logger.warning("Request error from %s: %s", base_url, e)
+
+        # All bases failed
+        if last_error:
+            raise last_error
+        raise httpx.RequestError("All Binance API bases failed")
 
     def get_agg_trades(
         self,
@@ -239,30 +327,63 @@ class BinanceRestClient:
 
 
 class BinanceWebSocketCollector:
-    """WebSocket collector for Binance real-time market data."""
+    """WebSocket collector for Binance real-time market data with failover."""
 
     def __init__(
         self,
         symbol: str = DEFAULT_SYMBOL,
-        ws_base: str = BINANCE_WS_BASE,
+        ws_bases: list[str] | str | None = None,
         max_reconnect_delay: float = 60.0,
         trade_buffer_size: int = 10000,
     ):
         self.symbol = symbol.lower()
-        self.ws_base = ws_base
+
+        if ws_bases is None:
+            self.ws_bases = list(BINANCE_WS_BASE_URLS)
+        elif isinstance(ws_bases, str):
+            self.ws_bases = [ws_bases]
+        else:
+            self.ws_bases = list(ws_bases)
+
         self.max_reconnect_delay = max_reconnect_delay
         self.trade_buffer: deque[AggTrade] = deque(maxlen=trade_buffer_size)
         self.klines: dict[str, Kline | None] = {}
         self._running = False
         self._reconnect_delay = 1.0
         self._ws: Any = None
+        self._current_base_idx = 0
+        self._unusable_bases: set[str] = set()
+
+    @property
+    def ws_base(self) -> str:
+        """Current active WebSocket base URL."""
+        return self._get_usable_base()
+
+    def _get_usable_base(self) -> str:
+        """Get the first usable WebSocket base URL."""
+        for url in self.ws_bases[self._current_base_idx :]:
+            if url not in self._unusable_bases:
+                return url
+        # If all marked unusable, reset and try again
+        self._unusable_bases.clear()
+        return self.ws_bases[0]
+
+    def _mark_unusable(self, base_url: str) -> None:
+        """Mark a WebSocket base URL as unusable."""
+        logger.warning("Marking WebSocket base URL as unusable: %s", base_url)
+        self._unusable_bases.add(base_url)
+        for i, url in enumerate(self.ws_bases):
+            if url == base_url:
+                self._current_base_idx = i + 1
+                break
 
     def _get_stream_url(self, streams: list[str]) -> str:
         """Build WebSocket URL for combined streams."""
+        base = self.ws_base
         if len(streams) == 1:
-            return f"{self.ws_base}/{streams[0]}"
+            return f"{base}/{streams[0]}"
         combined = "/".join(streams)
-        return f"{self.ws_base}/stream?streams={combined}"
+        return f"{base}/stream?streams={combined}"
 
     def _parse_agg_trade(self, data: dict[str, Any]) -> AggTrade:
         """Parse aggregated trade from WebSocket message."""
@@ -374,7 +495,7 @@ class BinanceWebSocketCollector:
         on_snapshot: Callable[[Snapshot], None] | None = None,
         snapshot_interval_seconds: float = 5.0,
     ) -> None:
-        """Run the WebSocket collector with automatic reconnection.
+        """Run the WebSocket collector with automatic reconnection and failover.
 
         Args:
             kline_intervals: List of kline intervals to subscribe to (e.g., ["1m", "5m"])
@@ -393,6 +514,17 @@ class BinanceWebSocketCollector:
             except Exception as e:
                 if not self._running:
                     break
+
+                # Check if this might be a restriction error
+                error_str = str(e).lower()
+                if "451" in error_str or "restricted" in error_str or "forbidden" in error_str:
+                    current_base = self.ws_base
+                    logger.warning(
+                        "WebSocket appears restricted on %s, trying next base",
+                        current_base,
+                    )
+                    self._mark_unusable(current_base)
+
                 logger.error("WebSocket error: %s", e)
 
             # Exponential backoff with jitter
@@ -400,13 +532,7 @@ class BinanceWebSocketCollector:
                 delay = self._reconnect_delay + random.uniform(0, 1.0)
                 logger.info("Reconnecting in %.1f seconds...", delay)
                 await asyncio.sleep(delay)
-<<<<<<< HEAD
                 self._reconnect_delay = min(self.max_reconnect_delay, self._reconnect_delay * 1.5)
-=======
-                self._reconnect_delay = min(
-                    self.max_reconnect_delay, self._reconnect_delay * 1.5
-                )
->>>>>>> origin/fix/f80d90a7
 
     def stop(self) -> None:
         """Stop the collector."""
@@ -419,6 +545,7 @@ def collect_snapshot_rest(
     out_dir: Path,
     symbol: str = DEFAULT_SYMBOL,
     kline_intervals: list[str] | None = None,
+    base_urls: list[str] | str | None = None,
 ) -> Path:
     """Collect a single snapshot using REST API.
 
@@ -426,6 +553,7 @@ def collect_snapshot_rest(
         out_dir: Directory to write output files
         symbol: Trading pair symbol
         kline_intervals: Kline intervals to fetch
+        base_urls: Optional base URL(s) to override defaults
 
     Returns:
         Path to the written JSON file
@@ -436,7 +564,7 @@ def collect_snapshot_rest(
     now = datetime.now(UTC)
     ts_str = now.strftime("%Y%m%dT%H%M%SZ")
 
-    with BinanceRestClient() as client:
+    with BinanceRestClient(base_urls=base_urls) as client:
         # Fetch recent trades (last 1000)
         end_time = int(now.timestamp() * 1000)
         start_time = end_time - (60 * 1000)  # Last 60 seconds
@@ -484,6 +612,7 @@ async def collect_loop_ws(
     snapshot_interval_seconds: float = 5.0,
     max_reconnect_delay: float = 60.0,
     retention_hours: float | None = None,
+    ws_bases: list[str] | str | None = None,
 ) -> None:
     """Continuously collect market data via WebSocket.
 
@@ -494,36 +623,28 @@ async def collect_loop_ws(
         snapshot_interval_seconds: How often to write snapshots
         max_reconnect_delay: Maximum reconnection delay in seconds
         retention_hours: If set, delete files older than this many hours
+        ws_bases: Optional WebSocket base URL(s) to override defaults
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     kline_intervals = kline_intervals or ["1m", "5m"]
 
-<<<<<<< HEAD
-    collector = BinanceWebSocketCollector(symbol=symbol, max_reconnect_delay=max_reconnect_delay)
+    collector = BinanceWebSocketCollector(
+        symbol=symbol,
+        ws_bases=ws_bases,
+        max_reconnect_delay=max_reconnect_delay,
+    )
 
     def on_snapshot(snapshot: Snapshot) -> None:
         # Write JSON snapshot
         ts_str = datetime.fromtimestamp(snapshot.timestamp_ms / 1000, tz=UTC).strftime(
             "%Y%m%dT%H%M%SZ"
         )
-=======
-    collector = BinanceWebSocketCollector(
-        symbol=symbol, max_reconnect_delay=max_reconnect_delay
-    )
-
-    def on_snapshot(snapshot: Snapshot) -> None:
-        # Write JSON snapshot
-        ts_str = datetime.fromtimestamp(
-            snapshot.timestamp_ms / 1000, tz=UTC
-        ).strftime("%Y%m%dT%H%M%SZ")
->>>>>>> origin/fix/f80d90a7
         out_path = out_dir / f"binance_{symbol.lower()}_{ts_str}.json"
         out_path.write_text(json.dumps(snapshot.to_dict(), indent=2, sort_keys=True))
 
         # Write latest pointer
         latest = out_dir / f"latest_{symbol.lower()}.json"
         latest.write_text(
-<<<<<<< HEAD
             json.dumps(
                 {
                     "path": str(out_path),
@@ -531,13 +652,6 @@ async def collect_loop_ws(
                     "timestamp_ms": snapshot.timestamp_ms,
                 }
             )
-=======
-            json.dumps({
-                "path": str(out_path),
-                "generated_at": datetime.now(UTC).isoformat(),
-                "timestamp_ms": snapshot.timestamp_ms,
-            })
->>>>>>> origin/fix/f80d90a7
         )
 
         # Prune old files if retention is set
@@ -588,8 +702,19 @@ def run_collector_loop(
     snapshot_interval_seconds: float = 5.0,
     max_reconnect_delay: float = 60.0,
     retention_hours: float | None = None,
+    ws_bases: list[str] | str | None = None,
 ) -> None:
-    """Synchronous entry point to run the WebSocket collector loop."""
+    """Synchronous entry point to run the WebSocket collector loop.
+
+    Args:
+        out_dir: Directory to write output files
+        symbol: Trading pair symbol
+        kline_intervals: Kline intervals to subscribe to
+        snapshot_interval_seconds: How often to generate snapshots
+        max_reconnect_delay: Maximum reconnection delay in seconds
+        retention_hours: If set, delete files older than this many hours
+        ws_bases: Optional WebSocket base URL(s) to override defaults
+    """
     asyncio.run(
         collect_loop_ws(
             out_dir=out_dir,
@@ -598,5 +723,6 @@ def run_collector_loop(
             snapshot_interval_seconds=snapshot_interval_seconds,
             max_reconnect_delay=max_reconnect_delay,
             retention_hours=retention_hours,
+            ws_bases=ws_bases,
         )
     )

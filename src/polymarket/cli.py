@@ -614,8 +614,396 @@ def cmd_weather_consensus_loop(args: argparse.Namespace) -> None:
         dry_run=not args.live,
     )
 
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        status = "✓ FRESH" if result["fresh"] else "✗ STALE"
+        print(f"{status}: {result['message']}")
+        if result["age_seconds"] is not None:
+            print(f"  Age: {result['age_seconds']:.1f}s (max: {args.max_age_seconds}s)")
+        print(f"  Collector running: {result['collector_running']}")
+        if result["collector_pid"]:
+            print(f"  PID: {result['collector_pid']}")
+        print(f"  Action: {result['action_taken']}")
 
-def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
+    # Exit with error code if data is stale and --fail is set
+    if args.fail and not result["fresh"]:
+        raise SystemExit(1)
+
+
+def cmd_paper_record_fill(args: argparse.Namespace) -> None:
+    """Record a paper trade fill."""
+    from decimal import Decimal
+    from pathlib import Path
+
+    from .paper_trading import PaperTradingEngine
+
+    engine = PaperTradingEngine(
+        data_dir=Path(args.data_dir),
+        starting_cash=Decimal(str(args.starting_cash)),
+    )
+
+    fill = engine.record_fill(
+        token_id=args.token_id,
+        side=args.side,
+        size=Decimal(str(args.size)),
+        price=Decimal(str(args.price)),
+        fee=Decimal(str(args.fee)) if args.fee else Decimal("0"),
+        market_slug=args.market_slug,
+        market_question=args.market_question,
+    )
+
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "status": "recorded",
+                    "fill": {
+                        "token_id": fill.token_id,
+                        "side": fill.side,
+                        "size": str(fill.size),
+                        "price": str(fill.price),
+                        "timestamp": fill.timestamp,
+                    },
+                },
+                indent=2,
+            )
+        )
+    else:
+        print(f"✓ Recorded {fill.side.upper()} {fill.size} @ {fill.price}")
+        print(f"  Token: {fill.token_id}")
+        print(f"  Cash impact: ${fill.cash_flow:,.2f}")
+
+
+def cmd_paper_positions(args: argparse.Namespace) -> None:
+    """Show current paper trading positions."""
+    from pathlib import Path
+
+    from .paper_trading import PaperTradingEngine
+
+    engine = PaperTradingEngine(data_dir=Path(args.data_dir))
+    positions = engine.get_positions()
+
+    # Filter to open positions only unless --all
+    if not args.all:
+        positions = {k: v for k, v in positions.items() if v.net_size != 0}
+
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "positions": [p.to_dict() for p in positions.values()],
+                    "count": len(positions),
+                },
+                indent=2,
+            )
+        )
+    else:
+        print("=" * 70)
+        print("PAPER TRADING POSITIONS")
+        print("=" * 70)
+        print(f"Total positions: {len(positions)}")
+        print(f"Open positions: {len([p for p in positions.values() if p.net_size != 0])}")
+        print()
+
+        for pos in sorted(positions.values(), key=lambda x: abs(x.net_size), reverse=True):
+            status = "OPEN" if pos.net_size != 0 else "CLOSED"
+            slug = pos.market_slug or pos.token_id[:30]
+            print(f"{status:<7} | {slug:<40}")
+            print(f"        Size: {pos.net_size:>12,.2f} | Avg cost: ${pos.avg_cost_basis:.3f}")
+            print(
+                f"        Realized PnL: ${pos.realized_pnl:>10,.2f} | Fees: ${pos.total_fees:.2f}"
+            )
+            print()
+
+
+def cmd_paper_equity(args: argparse.Namespace) -> None:
+    """Show current paper trading equity."""
+    from pathlib import Path
+
+    from .paper_trading import PaperTradingEngine
+
+    engine = PaperTradingEngine(data_dir=Path(args.data_dir))
+
+    # Use snapshot if provided
+    snapshot_path = Path(args.snapshot) if args.snapshot else None
+
+    equity = engine.compute_equity(snapshot_path=snapshot_path)
+
+    if args.format == "json":
+        print(json.dumps(equity.to_dict(), indent=2))
+    else:
+        print("=" * 70)
+        print("PAPER TRADING EQUITY")
+        print("=" * 70)
+        print(f"Timestamp: {equity.timestamp}")
+        print()
+        print(f"Cash Balance:       ${equity.cash_balance:>12,.2f}")
+        print(f"Mark to Market:     ${equity.mark_to_market:>12,.2f}")
+        print(f"Liquidation Value:  ${equity.liquidation_value:>12,.2f}")
+        print(f"Net Equity:         ${equity.net_equity:>12,.2f}")
+        print()
+        print(f"Realized PnL:       ${equity.realized_pnl:>12,.2f}")
+        print(f"Unrealized PnL:     ${equity.unrealized_pnl:>12,.2f}")
+        print(f"Total Fees:         ${equity.total_fees:>12,.2f}")
+        print()
+        print(f"Positions:          {equity.position_count}")
+        print(f"Open Positions:     {equity.open_position_count}")
+        print("=" * 70)
+
+
+def cmd_paper_reconcile(args: argparse.Namespace) -> None:
+    """Reconcile paper positions against a collector snapshot."""
+    from decimal import Decimal
+    from pathlib import Path
+
+    from .paper_trading import PaperTradingEngine
+
+    engine = PaperTradingEngine(data_dir=Path(args.data_dir))
+    snapshot_path = Path(args.snapshot)
+
+    if not snapshot_path.exists():
+        print(
+            json.dumps({"error": f"Snapshot not found: {args.snapshot}"}),
+            file=__import__("sys").stderr,
+        )
+        raise SystemExit(1)
+
+    result = engine.reconcile_against_snapshot(
+        snapshot_path=snapshot_path,
+        drift_threshold_usd=Decimal(str(args.drift_threshold)),
+        drift_threshold_pct=Decimal(str(args.drift_pct)),
+    )
+
+    if args.format == "json":
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        print("=" * 70)
+        print("PAPER TRADING RECONCILIATION")
+        print("=" * 70)
+        print(f"Snapshot: {result.snapshot_timestamp}")
+        print()
+        print(f"Positions Reconciled: {result.positions_reconciled}")
+        print(f"Positions with Drift: {result.positions_with_drift}")
+        print(f"Total Drift (USD):    ${result.total_drift_usd:.2f}")
+        print(f"Max Drift (%):        {result.max_drift_pct:.2f}%")
+        print()
+
+        if result.position_drifts:
+            print("--- Position Drifts ---")
+            for drift in result.position_drifts:
+                print(f"  {drift['market_slug'] or drift['token_id'][:30]}")
+                print(
+                    f"    Size: {drift['net_size']:.2f} | Drift: ${drift['drift_usd']:.2f} ({drift['drift_pct']:.2f}%)"
+                )
+
+        if result.warnings:
+            print("\n--- Warnings ---")
+            for warning in result.warnings:
+                print(f"  ! {warning}")
+
+        print("=" * 70)
+
+
+def cmd_paper_backtest(args: argparse.Namespace) -> None:
+    """Run paper trading equity calculation against all 15m snapshots."""
+    from pathlib import Path
+
+    from .paper_trading import run_equity_calculation_against_snapshots
+
+    data_dir = Path(args.data_dir)
+    snapshot_dir = Path(args.snapshot_dir)
+    output_file = Path(args.output) if args.output else None
+
+    if not snapshot_dir.exists():
+        print(
+            json.dumps({"error": f"Snapshot directory not found: {args.snapshot_dir}"}),
+            file=__import__("sys").stderr,
+        )
+        raise SystemExit(1)
+
+    summary = run_equity_calculation_against_snapshots(
+        data_dir=data_dir,
+        snapshot_dir=snapshot_dir,
+        output_file=output_file,
+    )
+
+    if "error" in summary:
+        print(json.dumps(summary, indent=2), file=__import__("sys").stderr)
+        raise SystemExit(1)
+
+    if args.format == "json":
+        print(json.dumps(summary, indent=2))
+    else:
+        print("=" * 70)
+        print("PAPER TRADING BACKTEST RESULTS")
+        print("=" * 70)
+        print(f"Snapshots Processed: {summary['snapshots_processed']}")
+        print(f"Data Points:         {summary['data_points']}")
+        print()
+        print(f"Starting Equity:     ${summary['starting_equity']:,.2f}")
+        print(f"Current Equity:      ${summary['current_equity']:,.2f}")
+        print(
+            f"Total Return:        ${summary['total_return']:,.2f} ({summary['total_return_pct']:.2f}%)"
+        )
+        print()
+        print(
+            f"Max Drawdown:        ${summary['max_drawdown']:,.2f} ({summary['max_drawdown_pct']:.2f}%)"
+        )
+        print(f"Realized PnL:        ${summary['realized_pnl']:,.2f}")
+        print(f"Unrealized PnL:      ${summary['unrealized_pnl']:,.2f}")
+        print(f"Total Fees:          ${summary['total_fees']:,.2f}")
+
+        if output_file:
+            print(f"\nEquity curve saved to: {output_file}")
+
+        print("=" * 70)
+
+
+def cmd_copytrade_loop(args: argparse.Namespace) -> None:
+    """Run copytrade accounting loop."""
+    from decimal import Decimal
+    from pathlib import Path
+
+    from .copytrade_loop import CopytradeConfig, copytrade_loop
+
+    config = CopytradeConfig(
+        wallet_address=args.wallet,
+        data_dir=Path(args.data_dir),
+        starting_cash=Decimal(str(args.starting_cash)),
+    )
+
+    snapshot_dir = Path(args.snapshot_dir) if args.snapshot_dir else None
+
+    try:
+        copytrade_loop(
+            config=config,
+            fill_collection_interval_seconds=args.interval_seconds,
+            pnl_verification_time_utc=args.pnl_time,
+            snapshot_dir=snapshot_dir,
+            max_backoff_seconds=args.max_backoff_seconds,
+        )
+    except KeyboardInterrupt:
+        print("\nCopytrade loop stopped.")
+
+
+def cmd_copytrade_pnl(args: argparse.Namespace) -> None:
+    """Run single PnL verification on copytrade fills."""
+    from decimal import Decimal
+    from pathlib import Path
+
+    from .copytrade_loop import run_single_pnl_verify
+
+    data_dir = Path(args.data_dir)
+    output_dir = Path(args.output_dir) if args.output_dir else None
+    snapshot_path = Path(args.snapshot) if args.snapshot else None
+
+    summary_path = run_single_pnl_verify(
+        data_dir=data_dir,
+        output_dir=output_dir,
+        snapshot_path=snapshot_path,
+        starting_cash=Decimal(str(args.starting_cash)),
+    )
+
+    if summary_path is None:
+        print(
+            json.dumps({"error": "PnL verification failed - check logs"}),
+            file=__import__("sys").stderr,
+        )
+        raise SystemExit(1)
+
+    if args.format == "json":
+        print(json.dumps({"summary_path": str(summary_path)}, indent=2))
+    else:
+        print(f"PnL summary saved to: {summary_path}")
+        # Also print a summary
+        import json as json_mod
+
+        data = json_mod.loads(summary_path.read_text())
+        print("\n" + "=" * 70)
+        print("COPYTRADE PnL SUMMARY")
+        print("=" * 70)
+        print(f"Generated: {data['metadata']['generated_at']}")
+        print(f"Fills: {data['summary']['total_fills']}")
+        print(f"Positions: {data['summary']['unique_tokens']}")
+        print()
+        print(f"Realized PnL:   ${data['pnl']['realized_pnl']:,.2f}")
+        print(f"Unrealized PnL: ${data['pnl']['unrealized_pnl']:,.2f}")
+        print(f"Total Fees:     ${data['pnl']['total_fees']:,.2f}")
+        print(f"Net PnL:        ${data['pnl']['net_pnl']:,.2f}")
+        print("=" * 70)
+
+
+def cmd_copytrade_collect(args: argparse.Namespace) -> None:
+    """Collect fills for a wallet (one-time)."""
+    from datetime import datetime
+    from pathlib import Path
+
+    from .copytrade_loop import CopytradeConfig, collect_fills
+
+    config = CopytradeConfig(
+        wallet_address=args.wallet,
+        data_dir=Path(args.data_dir),
+    )
+
+    since = None
+    if args.since:
+        since = datetime.fromisoformat(args.since.replace("Z", "+00:00"))
+
+    result = collect_fills(config, since=since)
+
+    if args.format == "json":
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        status = "✓ SUCCESS" if not result.errors else "✗ ERRORS"
+        print(f"{status}: Fill collection complete")
+        print(f"  New fills: {result.new_fills}")
+        print(f"  Total fills: {result.total_fills}")
+        if result.last_fill_timestamp:
+            print(f"  Latest fill: {result.last_fill_timestamp}")
+        if result.errors:
+            print(f"  Errors: {result.errors}")
+
+
+def cmd_dataset_join(args: argparse.Namespace) -> None:
+    """Align Polymarket 15m snapshots with Binance BTC features for lead/lag analysis."""
+    from pathlib import Path
+
+    from .dataset_join import build_aligned_dataset, save_report
+
+    pm_dir = Path(args.polymarket_dir)
+    bn_dir = Path(args.binance_dir)
+    out_dir = Path(args.out_dir) if args.out_dir else pm_dir
+
+    report = build_aligned_dataset(
+        polymarket_data_dir=pm_dir,
+        binance_data_dir=bn_dir,
+        hours=args.hours,
+        tolerance_seconds=args.tolerance,
+        horizons=args.horizons,
+    )
+
+    # Generate output filenames
+    from datetime import UTC, datetime
+
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    json_path = out_dir / f"leadlag_{timestamp}.json"
+    text_path = out_dir / f"leadlag_{timestamp}.txt" if args.text else None
+
+    # Save report
+    save_report(report, json_path, text_path)
+
+    # Output
+    if args.format == "json":
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(report.to_text())
+
+        if text_path:
+            print(f"\nReport saved to: {json_path}")
+            if text_path:
+                print(f"Text report saved to: {text_path}")
+
     """Run orderbook imbalance strategy backtest."""
     from pathlib import Path
 
@@ -1069,7 +1457,432 @@ def main() -> None:
     ib.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     ib.set_defaults(func=cmd_imbalance_backtest)
 
-    args = p.parse_args()
+    # Market data provider command (with auto-fallback)
+    mdc = sub.add_parser(
+        "marketdata-collect",
+        help="Collect BTC market data with provider fallback (binance/coinbase/kraken/auto)",
+    )
+    mdc.add_argument(
+        "--out",
+        default="data",
+        help="Output directory (default: data)",
+    )
+    mdc.add_argument(
+        "--provider",
+        choices=["binance", "coinbase", "kraken", "auto"],
+        default="auto",
+        help="Data provider (default: auto - tries binance, then coinbase, then kraken)",
+    )
+    mdc.add_argument(
+        "--symbol",
+        default="BTCUSDT",
+        help="Trading pair symbol (default: BTCUSDT)",
+    )
+    mdc.add_argument(
+        "--intervals",
+        nargs="+",
+        default=["1m", "5m"],
+        help="Kline intervals to fetch (default: 1m 5m)",
+    )
+    mdc.add_argument(
+        "--timeout",
+        type=float,
+        default=30.0,
+        help="Request timeout in seconds (default: 30)",
+    )
+    mdc.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Verbose output",
+    )
+    mdc.set_defaults(func=cmd_marketdata_collect)
+
+    # Cross-market arbitrage commands
+    cm = sub.add_parser(
+        "cross-market-scan",
+        help="Scan for cross-market arbitrage opportunities (Polymarket vs Kalshi)",
+    )
+    cm.add_argument("--out", default="data/cross_market", help="Output directory for trade data")
+    cm.add_argument(
+        "--categories",
+        type=str,
+        default=None,
+        help="Comma-separated categories (politics,crypto,sports,finance)",
+    )
+    cm.add_argument(
+        "--min-gross-spread",
+        type=float,
+        default=0.01,
+        help="Minimum gross spread before fees (default: 0.01 = 1%%)",
+    )
+    cm.add_argument(
+        "--min-net-spread",
+        type=float,
+        default=0.005,
+        help="Minimum net spread after fees (default: 0.005 = 0.5%%)",
+    )
+    cm.add_argument(
+        "--max-positions",
+        type=int,
+        default=10,
+        help="Maximum concurrent positions (default: 10)",
+    )
+    cm.add_argument(
+        "--position-size",
+        type=float,
+        default=1.0,
+        help="Position size in contracts per side (default: 1.0)",
+    )
+    cm.add_argument(
+        "--live",
+        action="store_true",
+        help="Enable live trading (default: dry-run)",
+    )
+    cm.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    cm.set_defaults(func=cmd_cross_market_scan)
+
+    cmr = sub.add_parser(
+        "cross-market-report",
+        help="Generate performance report for cross-market arbitrage",
+    )
+    cmr.add_argument(
+        "--data-dir",
+        default="data/cross_market",
+        help="Data directory containing trade data",
+    )
+    cmr.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    cmr.set_defaults(func=cmd_cross_market_report)
+
+    # Both-sides arbitrage commands
+    bs = sub.add_parser(
+        "both-sides-scan",
+        help="Scan for both-sides mispricing arbitrage opportunities on BTC markets",
+    )
+    bs.add_argument(
+        "--interval",
+        choices=["5m", "15m"],
+        default="5m",
+        help="Market interval to analyze (default: 5m)",
+    )
+    bs.add_argument(
+        "--check-alignment",
+        action="store_true",
+        help="Check 15m alignment for 5m signals",
+    )
+    bs.add_argument(
+        "--min-spread",
+        type=float,
+        default=0.02,
+        help="Minimum spread after fees (default: 0.02 = 2%%)",
+    )
+    bs.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Max opportunities to display",
+    )
+    bs.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    bs.set_defaults(func=cmd_both_sides_scan)
+
+    bst = sub.add_parser(
+        "both-sides-trade",
+        help="Execute paper trades for both-sides arbitrage opportunities",
+    )
+    bst.add_argument(
+        "--interval",
+        choices=["5m", "15m"],
+        default="5m",
+        help="Market interval (default: 5m)",
+    )
+    bst.add_argument(
+        "--check-alignment",
+        action="store_true",
+        help="Check 15m alignment for 5m signals",
+    )
+    bst.add_argument(
+        "--min-spread",
+        type=float,
+        default=0.02,
+        help="Minimum spread after fees (default: 0.02 = 2%%)",
+    )
+    bst.add_argument(
+        "--position-size",
+        type=float,
+        default=100.0,
+        help="Position size per side in $ (default: 100)",
+    )
+    bst.add_argument(
+        "--scan",
+        action="store_true",
+        default=True,
+        help="Scan before trading",
+    )
+    bst.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    bst.set_defaults(func=cmd_both_sides_trade)
+
+    bss = sub.add_parser(
+        "both-sides-stats",
+        help="Show both-sides arbitrage strategy statistics",
+    )
+    bss.add_argument(
+        "--position-size",
+        type=float,
+        default=100.0,
+        help="Position size per side in $ (default: 100)",
+    )
+    bss.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    bss.set_defaults(func=cmd_both_sides_stats)
+
+    # Mention market scan command
+    mm = sub.add_parser(
+        "mention-scan",
+        help="Scan for mention market opportunities with default-to-NO strategy",
+    )
+    mm.add_argument(
+        "--snapshots-dir",
+        type=str,
+        default=None,
+        help="Directory containing market snapshots",
+    )
+    mm.add_argument(
+        "--base-rate",
+        type=float,
+        default=0.15,
+        help="Historical base rate for mentions (default: 0.15)",
+    )
+    mm.add_argument(
+        "--max-positions",
+        type=int,
+        default=10,
+        help="Maximum positions to take (default: 10)",
+    )
+    mm.add_argument(
+        "--live",
+        action="store_true",
+        help="Execute live trades (default: dry-run)",
+    )
+    mm.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    mm.set_defaults(func=cmd_mention_scan)
+
+    # Paper trading commands
+    paper = sub.add_parser("paper", help="Paper trading commands")
+    paper_sub = paper.add_subparsers(dest="paper_cmd", required=True)
+
+    # paper record-fill
+    paper_fill = paper_sub.add_parser("record-fill", help="Record a paper trade fill")
+    paper_fill.add_argument("token_id", help="Token ID (YES/NO token)")
+    paper_fill.add_argument("side", choices=["buy", "sell"], help="Trade side")
+    paper_fill.add_argument("size", type=float, help="Number of shares")
+    paper_fill.add_argument("price", type=float, help="Execution price (0.0-1.0)")
+    paper_fill.add_argument("--fee", type=float, default=0.0, help="Trading fee")
+    paper_fill.add_argument("--market-slug", default=None, help="Market slug")
+    paper_fill.add_argument("--market-question", default=None, help="Market question")
+    paper_fill.add_argument("--data-dir", default="data/paper_trading", help="Data directory")
+    paper_fill.add_argument("--starting-cash", type=float, default=10000.0, help="Starting cash")
+    paper_fill.add_argument(
+        "--format", choices=["json", "human"], default="human", help="Output format"
+    )
+    paper_fill.set_defaults(func=cmd_paper_record_fill)
+
+    # paper positions
+    paper_pos = paper_sub.add_parser("positions", help="Show current positions")
+    paper_pos.add_argument("--data-dir", default="data/paper_trading", help="Data directory")
+    paper_pos.add_argument("--all", action="store_true", help="Show all positions including closed")
+    paper_pos.add_argument(
+        "--format", choices=["json", "human"], default="human", help="Output format"
+    )
+    paper_pos.set_defaults(func=cmd_paper_positions)
+
+    # paper equity
+    paper_eq = paper_sub.add_parser("equity", help="Show current equity")
+    paper_eq.add_argument("--data-dir", default="data/paper_trading", help="Data directory")
+    paper_eq.add_argument("--snapshot", default=None, help="Path to collector snapshot for prices")
+    paper_eq.add_argument(
+        "--format", choices=["json", "human"], default="human", help="Output format"
+    )
+    paper_eq.set_defaults(func=cmd_paper_equity)
+
+    # paper reconcile
+    paper_rec = paper_sub.add_parser("reconcile", help="Reconcile against collector snapshot")
+    paper_rec.add_argument("snapshot", help="Path to collector snapshot")
+    paper_rec.add_argument("--data-dir", default="data/paper_trading", help="Data directory")
+    paper_rec.add_argument(
+        "--drift-threshold", type=float, default=0.01, help="USD drift threshold"
+    )
+    paper_rec.add_argument(
+        "--drift-pct", type=float, default=0.01, help="Percentage drift threshold"
+    )
+    paper_rec.add_argument(
+        "--format", choices=["json", "human"], default="human", help="Output format"
+    )
+    paper_rec.set_defaults(func=cmd_paper_reconcile)
+
+    # paper backtest
+    paper_bt = paper_sub.add_parser("backtest", help="Run backtest against 15m snapshots")
+    paper_bt.add_argument("--data-dir", default="data/paper_trading", help="Data directory")
+    paper_bt.add_argument(
+        "--snapshot-dir", default="data", help="Directory with collector snapshots"
+    )
+    paper_bt.add_argument("--output", default=None, help="Output file for equity curve JSON")
+    paper_bt.add_argument(
+        "--format", choices=["json", "human"], default="human", help="Output format"
+    )
+    paper_bt.set_defaults(func=cmd_paper_backtest)
+    # Combinatorial arbitrage command
+    cb = sub.add_parser(
+        "combinatorial-scan",
+        help="Scan for combinatorial arbitrage (Dutch book) opportunities",
+    )
+    cb.add_argument(
+        "--event-limit",
+        type=int,
+        default=100,
+        help="Maximum events to scan (default: 100)",
+    )
+    cb.add_argument(
+        "--fee-rate",
+        type=float,
+        default=0.0315,
+        help="Settlement fee rate (default: 0.0315 = 3.15%%)",
+    )
+    cb.add_argument(
+        "--min-edge",
+        type=float,
+        default=0.015,
+        help="Minimum edge after fees (default: 0.015 = 1.5%%)",
+    )
+    cb.add_argument(
+        "--max-basket-size",
+        type=int,
+        default=4,
+        help="Maximum outcomes per basket (default: 4)",
+    )
+    cb.add_argument(
+        "--min-liquidity",
+        type=float,
+        default=100.0,
+        help="Minimum liquidity per outcome (default: 100)",
+    )
+    cb.add_argument(
+        "--detailed",
+        action="store_true",
+        help="Show detailed output for all baskets",
+    )
+    cb.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    cb.set_defaults(func=cmd_combinatorial_scan)
+
+    # Copytrade commands
+    ct = sub.add_parser(
+        "copytrade-loop",
+        help="Run copytrade accounting loop (collect fills + daily PnL)",
+    )
+    ct.add_argument(
+        "--wallet",
+        required=True,
+        help="Wallet address to copytrade",
+    )
+    ct.add_argument(
+        "--data-dir",
+        default="data/copytrade",
+        help="Data directory for fills (default: data/copytrade)",
+    )
+    ct.add_argument(
+        "--interval-seconds",
+        type=float,
+        default=300.0,
+        help="Fill collection interval in seconds (default: 300 = 5min)",
+    )
+    ct.add_argument(
+        "--pnl-time",
+        type=str,
+        default="00:00",
+        help="Daily PnL verification time UTC (HH:MM format, default: 00:00)",
+    )
+    ct.add_argument(
+        "--snapshot-dir",
+        type=str,
+        default=None,
+        help="Directory with collector snapshots for price data",
+    )
+    ct.add_argument(
+        "--starting-cash",
+        type=float,
+        default=10000.0,
+        help="Starting cash balance (default: 10000)",
+    )
+    ct.add_argument(
+        "--max-backoff-seconds",
+        type=float,
+        default=300.0,
+        help="Max backoff on errors (default: 300)",
+    )
+    ct.set_defaults(func=cmd_copytrade_loop)
+
+    ct_pnl = sub.add_parser(
+        "copytrade-pnl",
+        help="Run single PnL verification on copytrade fills",
+    )
+    ct_pnl.add_argument(
+        "--data-dir",
+        default="data/copytrade",
+        help="Data directory containing fills.jsonl (default: data/copytrade)",
+    )
+    ct_pnl.add_argument(
+        "--output-dir",
+        default=None,
+        help="Output directory for PnL report (default: data-dir/pnl)",
+    )
+    ct_pnl.add_argument(
+        "--snapshot",
+        default=None,
+        help="Path to collector snapshot for price data",
+    )
+    ct_pnl.add_argument(
+        "--starting-cash",
+        type=float,
+        default=0.0,
+        help="Starting cash balance (default: 0)",
+    )
+    ct_pnl.add_argument(
+        "--format",
+        choices=["json", "human"],
+        default="human",
+        help="Output format (default: human)",
+    )
+    ct_pnl.set_defaults(func=cmd_copytrade_pnl)
+
+    ct_collect = sub.add_parser(
+        "copytrade-collect",
+        help="Collect fills for a wallet (one-time)",
+    )
+    ct_collect.add_argument(
+        "--wallet",
+        required=True,
+        help="Wallet address to collect fills for",
+    )
+    ct_collect.add_argument(
+        "--data-dir",
+        default="data/copytrade",
+        help="Data directory for fills (default: data/copytrade)",
+    )
+    ct_collect.add_argument(
+        "--since",
+        default=None,
+        help="ISO timestamp to collect from (inclusive)",
+    )
+    ct_collect.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="Maximum fills to fetch (default: 100)",
+    )
+    ct_collect.add_argument(
+        "--format",
+        choices=["json", "human"],
+        default="human",
+        help="Output format (default: human)",
+    )
+    ct_collect.set_defaults(func=cmd_copytrade_collect)
 
     # Handle --raw flag for microstructure command
     if hasattr(args, "raw") and args.raw:
