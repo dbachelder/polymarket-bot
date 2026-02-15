@@ -1,15 +1,11 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from polymarket.microstructure import (
-    DEFAULT_DEPTH_LEVELS,
-    DEFAULT_EXTREME_PIN_THRESHOLD,
-    DEFAULT_SPREAD_ALERT_THRESHOLD,
     _compute_book_metrics,
     _compute_implied_probabilities,
     analyze_market_microstructure,
