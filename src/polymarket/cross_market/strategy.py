@@ -30,9 +30,9 @@ logger = logging.getLogger(__name__)
 
 # Strategy configuration
 DEFAULT_MIN_GROSS_SPREAD = 0.01  # 1% minimum gross spread
-DEFAULT_MIN_NET_SPREAD = 0.005   # 0.5% minimum net spread after fees
-DEFAULT_MAX_POSITIONS = 10       # Maximum open positions
-DEFAULT_POSITION_SIZE = 1.0      # Contracts per side
+DEFAULT_MIN_NET_SPREAD = 0.005  # 0.5% minimum net spread after fees
+DEFAULT_MAX_POSITIONS = 10  # Maximum open positions
+DEFAULT_POSITION_SIZE = 1.0  # Contracts per side
 
 
 @dataclass(frozen=True)
@@ -167,7 +167,10 @@ class CrossMarketArbitrage:
 
         for opp in opportunities:
             if open_positions >= self.max_positions:
-                logger.info("Max positions reached (%d), skipping remaining opportunities", self.max_positions)
+                logger.info(
+                    "Max positions reached (%d), skipping remaining opportunities",
+                    self.max_positions,
+                )
                 break
 
             if not dry_run:
