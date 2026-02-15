@@ -19,6 +19,19 @@ class FiveMMarket:
     fees_enabled: bool | None = None
 
 
+@dataclass(frozen=True)
+class FifteenMMarket:
+    market_id: str
+    event_id: str
+    slug: str
+    question: str
+    end_date: str
+    clob_token_ids: tuple[str, str]
+    maker_base_fee: int | None = None
+    taker_base_fee: int | None = None
+    fees_enabled: bool | None = None
+
+
 _NEXT_DATA_RE = re.compile(
     r"<script[^>]*id=\"__NEXT_DATA__\"[^>]*>(.*?)</script>",
     re.DOTALL,
@@ -27,6 +40,14 @@ _NEXT_DATA_RE = re.compile(
 
 def fetch_predictions_page(slug: str = "5M") -> str:
     url = f"https://polymarket.com/predictions/{slug}"
+    r = httpx.get(url, timeout=30, headers={"User-Agent": "polymarket-bot/0.1"})
+    r.raise_for_status()
+    return r.text
+
+
+def fetch_crypto_page(slug: str = "15M") -> str:
+    """Fetch crypto time-series page (e.g., /crypto/15M, /crypto/5M)."""
+    url = f"https://polymarket.com/crypto/{slug}"
     r = httpx.get(url, timeout=30, headers={"User-Agent": "polymarket-bot/0.1"})
     r.raise_for_status()
     return r.text
@@ -77,6 +98,58 @@ def extract_5m_markets(next_data: dict) -> list[FiveMMarket]:
         out.append(
             FiveMMarket(
                 market_id=str(m0.get("id")),
+                slug=str(m0.get("slug")),
+                question=str(m0.get("question")),
+                end_date=str(m0.get("endDate")),
+                clob_token_ids=(str(token_ids[0]), str(token_ids[1])),
+                maker_base_fee=m0.get("makerBaseFee"),
+                taker_base_fee=m0.get("takerBaseFee"),
+                fees_enabled=m0.get("feesEnabled"),
+            )
+        )
+
+    return out
+
+
+def extract_15m_markets(next_data: dict) -> list[FifteenMMarket]:
+    """Extract 15M crypto markets from /crypto/15M page __NEXT_DATA__.
+
+    Structure differs from 5M: events contain markets, no tagLabel at page level.
+    """
+    dehydrated = next_data["props"]["pageProps"]["dehydratedState"]["queries"]
+
+    # Find the query that contains events (crypto/15M structure)
+    events: list[dict] = []
+    for q in dehydrated:
+        state = q.get("state", {})
+        data = state.get("data")
+        if not isinstance(data, dict):
+            continue
+        pages = data.get("pages")
+        # pages is a list in 15M structure
+        if isinstance(pages, list) and pages:
+            page_events = pages[0].get("events")
+            if isinstance(page_events, list):
+                events = page_events
+                break
+
+    if not events:
+        raise ValueError("Could not locate events payload in dehydratedState")
+
+    out: list[FifteenMMarket] = []
+    for event in events:
+        event_id = str(event.get("id", ""))
+        markets = event.get("markets") or []
+        if not markets:
+            continue
+        m0 = markets[0]
+        token_ids = m0.get("clobTokenIds")
+        if not token_ids or len(token_ids) != 2:
+            continue
+        out.append(
+            FifteenMMarket(
+                market_id=str(m0.get("id")),
+                event_id=event_id,
                 slug=str(m0.get("slug")),
                 question=str(m0.get("question")),
                 end_date=str(m0.get("endDate")),
