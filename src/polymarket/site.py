@@ -116,7 +116,9 @@ def extract_5m_markets(next_data: dict) -> list[FiveMMarket]:
     return out
 
 
-def extract_crypto_interval_events(next_data: dict, interval_slug: str = "15M") -> list[CryptoIntervalEvent]:
+def extract_crypto_interval_events(
+    next_data: dict, interval_slug: str = "15M"
+) -> list[CryptoIntervalEvent]:
     """Extract live interval events (e.g. 15m) from /crypto/<interval>.
 
     Observed structure: dehydratedState includes a query whose state.data.pages[*].events
@@ -140,7 +142,9 @@ def extract_crypto_interval_events(next_data: dict, interval_slug: str = "15M") 
         if not isinstance(candidate_pages, list) or not candidate_pages:
             continue
         # /crypto/<interval> seems to put events into pages[0].events.
-        if isinstance(candidate_pages[0], dict) and isinstance(candidate_pages[0].get("events"), list):
+        if isinstance(candidate_pages[0], dict) and isinstance(
+            candidate_pages[0].get("events"), list
+        ):
             pages = candidate_pages
             break
 

@@ -94,6 +94,7 @@ def cmd_collect_15m_loop(args: argparse.Namespace) -> None:
         interval_seconds=float(args.interval_seconds),
         max_backoff_seconds=float(args.max_backoff_seconds),
         retention_hours=args.retention_hours,
+        max_snapshots=args.max_snapshots,
         microstructure_interval_seconds=float(args.microstructure_interval_seconds),
         microstructure_target=args.microstructure_target,
         spread_alert_threshold=float(args.spread_alert_threshold),
@@ -299,6 +300,32 @@ def cmd_binance_features(args: argparse.Namespace) -> None:
     print(f"Aligned {len(aligned)} records to {out_path}")
 
 
+def cmd_health_check(args: argparse.Namespace) -> None:
+    """Check collector health and staleness SLA."""
+    from pathlib import Path
+
+    from .collector_loop import check_staleness_sla
+
+    out_dir = Path(args.data_dir)
+    result = check_staleness_sla(
+        out_dir=out_dir,
+        max_age_seconds=float(args.max_age_seconds),
+        prefix=args.prefix,
+    )
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        status = "✓ HEALTHY" if result["healthy"] else "✗ UNHEALTHY"
+        print(f"{status}: {result['message']}")
+        if result["age_seconds"] is not None:
+            print(f"  Age: {result['age_seconds']:.1f}s (max: {result['max_age_seconds']:.1f}s)")
+
+    # Exit with error code if unhealthy and --fail is set
+    if args.fail and not result["healthy"]:
+        raise SystemExit(1)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="polymarket")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -354,13 +381,25 @@ def main() -> None:
     )
     pc15l.add_argument("--out", default="data")
     pc15l.add_argument(
-        "--interval-seconds", type=float, default=5.0, help="Collection interval in seconds"
+        "--interval-seconds",
+        type=float,
+        default=60.0,
+        help="Collection interval in seconds (default: 60)",
     )
     pc15l.add_argument(
         "--max-backoff-seconds", type=float, default=60.0, help="Max backoff on errors"
     )
     pc15l.add_argument(
-        "--retention-hours", type=float, default=None, help="Prune snapshots older than N hours"
+        "--retention-hours",
+        type=float,
+        default=24.0,
+        help="Prune snapshots older than N hours (default: 24)",
+    )
+    pc15l.add_argument(
+        "--max-snapshots",
+        type=int,
+        default=1440,
+        help="Max snapshots to retain (default: 1440 ~= 24h at 60s)",
     )
     pc15l.add_argument(
         "--microstructure-interval-seconds",
@@ -459,6 +498,19 @@ def main() -> None:
     bf.add_argument("--out", default="data/aligned_features.json", help="Output file")
     bf.add_argument("--tolerance", type=float, default=1.0, help="Alignment tolerance in seconds")
     bf.set_defaults(func=cmd_binance_features)
+
+    hc = sub.add_parser("health-check", help="Check collector health and staleness SLA")
+    hc.add_argument("--data-dir", default="data", help="Data directory containing snapshots")
+    hc.add_argument(
+        "--max-age-seconds",
+        type=float,
+        default=120.0,
+        help="Max acceptable snapshot age (default: 120s)",
+    )
+    hc.add_argument("--prefix", default="snapshot_15m", help="Snapshot file prefix")
+    hc.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    hc.add_argument("--fail", action="store_true", help="Exit with error code if unhealthy")
+    hc.set_defaults(func=cmd_health_check)
 
     args = p.parse_args()
 

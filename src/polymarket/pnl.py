@@ -43,17 +43,21 @@ class Fill:
         # Handle various field naming conventions from Polymarket API
         token_id = data.get("token_id") or data.get("asset_id") or data.get("tokenID") or ""
         side = (data.get("side") or data.get("trade_side") or "buy").lower()
-        
+
         # Size might be called 'size', 'amount', 'takerAmount', etc.
         size_val = data.get("size") or data.get("amount") or data.get("takerAmount") or "0"
-        
+
         # Price might be called 'price', 'execution_price', etc.
-        price_val = data.get("price") or data.get("execution_price") or data.get("priceInNative") or "0"
-        
+        price_val = (
+            data.get("price") or data.get("execution_price") or data.get("priceInNative") or "0"
+        )
+
         # Fee might be called 'fee', 'trade_fee', etc.
         fee_val = data.get("fee") or data.get("trade_fee") or data.get("gas_fee") or "0"
-        
-        timestamp = data.get("timestamp") or data.get("created_at") or data.get("transaction_time") or ""
+
+        timestamp = (
+            data.get("timestamp") or data.get("created_at") or data.get("transaction_time") or ""
+        )
         tx_hash = data.get("transaction_hash") or data.get("tx_hash") or data.get("transactionHash")
 
         return cls(
@@ -115,7 +119,7 @@ class Position:
         sell_size = min(size, self.net_size)
         cost_basis = sell_size * self.avg_cost_basis
         proceeds = sell_size * price
-        
+
         # Realized PnL = proceeds - cost basis - fee
         realized = proceeds - cost_basis - fee
         self.realized_pnl += realized
@@ -165,13 +169,13 @@ class OrderBook:
         """Calculate liquidation value by walking the book.
 
         For YES positions: sell into bids (highest to lowest)
-        For NO positions: effectively sell YES at (1 - bid_price), 
+        For NO positions: effectively sell YES at (1 - bid_price),
                         but we model as buying YES at ask
-        
+
         Args:
             position_size: Number of shares (positive for long)
             is_yes: Whether this is a YES token
-            
+
         Returns:
             Total USDC value from liquidating the position
         """
@@ -214,21 +218,21 @@ class PnLReport:
     # Summary
     total_fills: int = 0
     unique_tokens: int = 0
-    
+
     # PnL Breakdown
     realized_pnl: Decimal = field(default_factory=lambda: Decimal("0"))
     unrealized_pnl: Decimal = field(default_factory=lambda: Decimal("0"))
     total_fees: Decimal = field(default_factory=lambda: Decimal("0"))
     net_pnl: Decimal = field(default_factory=lambda: Decimal("0"))
-    
+
     # Liquidation Analysis
     mark_to_market: Decimal = field(default_factory=lambda: Decimal("0"))
     liquidation_value: Decimal = field(default_factory=lambda: Decimal("0"))
     liquidation_discount: Decimal = field(default_factory=lambda: Decimal("0"))
-    
+
     # Position Details
     positions: list[dict] = field(default_factory=list)
-    
+
     # Warnings
     warnings: list[str] = field(default_factory=list)
 
@@ -251,7 +255,8 @@ class PnLReport:
                 "liquidation_discount": float(self.liquidation_discount),
                 "discount_pct": (
                     float(self.liquidation_discount / self.mark_to_market * 100)
-                    if self.mark_to_market > 0 else 0.0
+                    if self.mark_to_market > 0
+                    else 0.0
                 ),
             },
             "positions": self.positions,
@@ -276,37 +281,37 @@ def compute_pnl(
     """
     report = PnLReport()
     report.total_fills = len(fills)
-    
+
     # Group fills by token and build positions
     positions: dict[str, Position] = {}
-    
+
     # Sort fills by timestamp to process chronologically
     sorted_fills = sorted(fills, key=lambda f: f.timestamp)
-    
+
     for fill in sorted_fills:
         if fill.token_id not in positions:
             positions[fill.token_id] = Position(token_id=fill.token_id)
-        
+
         pos = positions[fill.token_id]
-        
+
         if fill.side == "buy":
             pos.add_buy(fill.size, fill.price, fill.fee)
         else:  # sell
             pos.add_sell(fill.size, fill.price, fill.fee)
-    
+
     report.unique_tokens = len(positions)
     report.total_fees = sum(p.total_fees for p in positions.values())
     report.realized_pnl = sum(p.realized_pnl for p in positions.values())
-    
+
     # Build position details and compute unrealized PnL
     position_details = []
     total_mtm = Decimal("0")
     total_liquidation = Decimal("0")
-    
+
     for token_id, pos in positions.items():
         if pos.net_size == 0:
             continue  # Skip closed positions
-            
+
         # Get current price for mark-to-market
         current_price = Decimal("0.5")  # Default to 0.5 if unknown
         if current_prices and token_id in current_prices:
@@ -316,55 +321,53 @@ def compute_pnl(
             book = orderbooks[token_id]
             if book.bids:
                 current_price = book.bids[0].price
-        
+
         # Calculate unrealized PnL
         unrealized = (current_price - pos.avg_cost_basis) * pos.net_size
-        
+
         # Mark to market = position value at current price
         mtm = current_price * pos.net_size
-        
+
         # Liquidation value
         liquidation = Decimal("0")
         if orderbooks and token_id in orderbooks:
             # Assume YES token for now - need to determine from context
-            liquidation = orderbooks[token_id].get_walk_liquidation_value(
-                pos.net_size, is_yes=True
-            )
+            liquidation = orderbooks[token_id].get_walk_liquidation_value(pos.net_size, is_yes=True)
         else:
             # Without orderbook, assume 10% discount for estimation
             liquidation = mtm * Decimal("0.9")
-        
+
         total_mtm += mtm
         total_liquidation += liquidation
-        
-        position_details.append({
-            "token_id": token_id,
-            "net_size": float(pos.net_size),
-            "avg_cost_basis": float(pos.avg_cost_basis),
-            "current_price": float(current_price),
-            "unrealized_pnl": float(unrealized),
-            "mark_to_market": float(mtm),
-            "liquidation_value": float(liquidation),
-            "buy_count": pos.buy_count,
-            "sell_count": pos.sell_count,
-        })
-    
+
+        position_details.append(
+            {
+                "token_id": token_id,
+                "net_size": float(pos.net_size),
+                "avg_cost_basis": float(pos.avg_cost_basis),
+                "current_price": float(current_price),
+                "unrealized_pnl": float(unrealized),
+                "mark_to_market": float(mtm),
+                "liquidation_value": float(liquidation),
+                "buy_count": pos.buy_count,
+                "sell_count": pos.sell_count,
+            }
+        )
+
     report.positions = position_details
     report.unrealized_pnl = Decimal(str(sum(p["unrealized_pnl"] for p in position_details)))
     report.net_pnl = report.realized_pnl + report.unrealized_pnl - report.total_fees
     report.mark_to_market = total_mtm
     report.liquidation_value = total_liquidation
     report.liquidation_discount = total_mtm - total_liquidation
-    
+
     # Add warnings for edge cases
     if any(p.net_size < 0 for p in positions.values()):
         report.warnings.append("Short positions detected - PnL may be incomplete")
-    
+
     if total_mtm > 0 and total_liquidation / total_mtm < Decimal("0.5"):
-        report.warnings.append(
-            "Large liquidation discount - position may be illiquid"
-        )
-    
+        report.warnings.append("Large liquidation discount - position may be illiquid")
+
     return report
 
 
@@ -378,7 +381,7 @@ def load_fills_from_file(path: Path) -> list[Fill]:
     """
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
-    
+
     # Handle different JSON structures
     if isinstance(data, list):
         fill_list = data
@@ -394,7 +397,7 @@ def load_fills_from_file(path: Path) -> list[Fill]:
             fill_list = [data]
     else:
         fill_list = []
-    
+
     return [Fill.from_dict(f) for f in fill_list]
 
 
@@ -405,9 +408,9 @@ def load_orderbooks_from_file(path: Path) -> dict[str, OrderBook]:
     """
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
-    
+
     books = {}
     for token_id, book_data in data.items():
         books[token_id] = OrderBook.from_dict(token_id, book_data)
-    
+
     return books
