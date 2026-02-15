@@ -155,6 +155,60 @@ def cmd_pnl_verify(args: argparse.Namespace) -> None:
         print("\n" + "=" * 60)
 
 
+def cmd_binance_collect(args: argparse.Namespace) -> None:
+    """Collect Binance BTC market data (REST API single snapshot)."""
+    from pathlib import Path
+
+    from .binance_collector import collect_snapshot_rest
+
+    out_dir = Path(args.out)
+    out_path = collect_snapshot_rest(
+        out_dir=out_dir,
+        symbol=args.symbol,
+        kline_intervals=args.intervals,
+    )
+    print(str(out_path))
+
+
+def cmd_binance_loop(args: argparse.Namespace) -> None:
+    """Run Binance WebSocket collector loop."""
+    from pathlib import Path
+
+    from .binance_collector import run_collector_loop
+
+    run_collector_loop(
+        out_dir=Path(args.out),
+        symbol=args.symbol,
+        kline_intervals=args.intervals,
+        snapshot_interval_seconds=float(args.snapshot_interval_seconds),
+        max_reconnect_delay=float(args.max_reconnect_delay),
+        retention_hours=args.retention_hours,
+    )
+
+
+def cmd_binance_features(args: argparse.Namespace) -> None:
+    """Build features from Binance data and align to Polymarket snapshots."""
+    from pathlib import Path
+
+    from .binance_features import (
+        align_to_polymarket_snapshots,
+        save_aligned_features,
+    )
+
+    binance_dir = Path(args.binance_dir)
+    polymarket_dir = Path(args.polymarket_dir)
+    out_path = Path(args.out)
+
+    aligned = align_to_polymarket_snapshots(
+        binance_data_dir=binance_dir,
+        polymarket_data_dir=polymarket_dir,
+        tolerance_seconds=float(args.tolerance),
+    )
+
+    save_aligned_features(aligned, out_path)
+    print(f"Aligned {len(aligned)} records to {out_path}")
+
+
 def cmd_hourly_digest(args: argparse.Namespace) -> None:
     """Generate hourly digest report from snapshot data."""
     from pathlib import Path
@@ -217,56 +271,83 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     p5 = sub.add_parser("markets-5m", help="Heuristic fetch of likely 5-minute markets")
-    p5.add_argument("--limit", type=int, default=50)
-    p5.add_argument("--search", type=str, default=None)
+    p5.add_argument("--limit", type=int, default=20)
     p5.set_defaults(func=cmd_markets_5m)
 
-    pb = sub.add_parser("book", help="Fetch CLOB orderbook for a token_id")
+    p15 = sub.add_parser("markets-15m", help="Fetch 15-minute crypto markets")
+    p15.add_argument("--limit", type=int, default=20)
+    p15.set_defaults(func=cmd_markets_15m)
+
+    pb = sub.add_parser("book", help="Get order book for a token")
     pb.add_argument("token_id")
     pb.set_defaults(func=cmd_book)
 
-    pp = sub.add_parser("price", help="Fetch CLOB price for a token_id")
+    pp = sub.add_parser("price", help="Get mid price for a token")
     pp.add_argument("token_id")
-    pp.add_argument("--side", choices=["buy", "sell"], default="buy")
+    pp.add_argument("--side", default="buy")
     pp.set_defaults(func=cmd_price)
 
-    pc = sub.add_parser("collect-5m", help="Snapshot /predictions/5M + CLOB orderbooks")
-    pc.add_argument("--out", default="data")
-    pc.add_argument("--every-seconds", type=float, default=None, help="Enable continuous collection mode (interval in seconds)")
-    pc.add_argument("--max-backoff-seconds", type=float, default=60.0, help="Max backoff on errors (default: 60)")
-    pc.add_argument("--retention-hours", type=float, default=None, help="Prune snapshots older than N hours")
-    pc.set_defaults(func=cmd_collect_5m)
+    # 5m collection
+    c5 = sub.add_parser("collect-5m", help="Collect 5m market data")
+    c5.add_argument("--out", default="data/5m")
+    c5.add_argument("--every-seconds", type=float, default=None)
+    c5.add_argument("--max-backoff-seconds", type=float, default=60.0)
+    c5.add_argument("--retention-hours", type=int, default=48)
+    c5.set_defaults(func=cmd_collect_5m)
 
-    pu = sub.add_parser("universe-5m", help="Build normalized market universe from /predictions/5M")
-    pu.add_argument("--out", default="data/universe.json", help="Output JSON file path")
-    pu.add_argument("--cross-check", action="store_true", help="Verify against Gamma API")
-    pu.set_defaults(func=cmd_universe_5m)
+    # 15m collection
+    c15 = sub.add_parser("collect-15m", help="Collect 15m crypto market data (single)")
+    c15.add_argument("--out", default="data/15m")
+    c15.set_defaults(func=cmd_collect_15m)
 
-    p15 = sub.add_parser("markets-15m", help="Heuristic fetch of 15-minute crypto interval markets")
-    p15.add_argument("--limit", type=int, default=50)
-    p15.set_defaults(func=cmd_markets_15m)
+    c15l = sub.add_parser("collect-15m-loop", help="Collect 15m data in a loop")
+    c15l.add_argument("--out", default="data/15m")
+    c15l.add_argument("--interval-seconds", type=float, default=5.0)
+    c15l.add_argument("--max-backoff-seconds", type=float, default=60.0)
+    c15l.add_argument("--retention-hours", type=int, default=48)
+    c15l.set_defaults(func=cmd_collect_15m_loop)
 
-    pc15 = sub.add_parser("collect-15m", help="Snapshot /crypto/15M + CLOB orderbooks")
-    pc15.add_argument("--out", default="data")
-    pc15.set_defaults(func=cmd_collect_15m)
+    # Universe
+    uni = sub.add_parser("universe-5m", help="Build and save 5m market universe")
+    uni.add_argument("--out", default="data/universe.json")
+    uni.add_argument("--cross-check", action="store_true", default=False)
+    uni.set_defaults(func=cmd_universe_5m)
 
-    pc15l = sub.add_parser("collect-15m-loop", help="Continuously snapshot /crypto/15M + CLOB orderbooks")
-    pc15l.add_argument("--out", default="data")
-    pc15l.add_argument("--interval-seconds", type=float, default=5.0, help="Collection interval in seconds")
-    pc15l.add_argument("--max-backoff-seconds", type=float, default=60.0, help="Max backoff on errors")
-    pc15l.add_argument("--retention-hours", type=float, default=None, help="Prune snapshots older than N hours")
-    pc15l.set_defaults(func=cmd_collect_15m_loop)
-
-    pnl = sub.add_parser("pnl-verify", help="Verify PnL from fills data (debunk screenshots)")
-    pnl.add_argument("--input", required=True, help="Path to fills JSON file")
-    pnl.add_argument("--books", default=None, help="Path to orderbooks JSON for liquidation value")
-    pnl.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    # PnL verification
+    pnl = sub.add_parser("pnl-verify", help="Verify PnL from fills data")
+    pnl.add_argument("input", help="Path to fills JSON file")
+    pnl.add_argument("--books", help="Optional path to orderbooks JSON for liquidation value")
+    pnl.add_argument("--format", choices=["json", "human"], default="human")
     pnl.set_defaults(func=cmd_pnl_verify)
 
-    hd = sub.add_parser("hourly-digest", help="Generate hourly report from 15m snapshots")
-    hd.add_argument("--data-dir", default="data", help="Directory containing snapshot files")
-    hd.add_argument("--interval-seconds", type=float, default=5.0, help="Expected collection interval")
-    hd.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    # Binance collection
+    bc = sub.add_parser("binance-collect", help="Collect Binance BTC market data (REST)")
+    bc.add_argument("--out", default="data/binance")
+    bc.add_argument("--symbol", default="BTCUSDT")
+    bc.add_argument("--intervals", nargs="+", default=["1m", "5m", "15m"])
+    bc.set_defaults(func=cmd_binance_collect)
+
+    bl = sub.add_parser("binance-loop", help="Run Binance WebSocket collector loop")
+    bl.add_argument("--out", default="data/binance")
+    bl.add_argument("--symbol", default="BTCUSDT")
+    bl.add_argument("--intervals", nargs="+", default=["1m", "5m", "15m"])
+    bl.add_argument("--snapshot-interval-seconds", type=float, default=5.0)
+    bl.add_argument("--max-reconnect-delay", type=float, default=60.0)
+    bl.add_argument("--retention-hours", type=int, default=48)
+    bl.set_defaults(func=cmd_binance_loop)
+
+    bf = sub.add_parser("binance-features", help="Build features from Binance data")
+    bf.add_argument("--binance-dir", default="data/binance")
+    bf.add_argument("--polymarket-dir", default="data/15m")
+    bf.add_argument("--out", default="data/binance_features.json")
+    bf.add_argument("--tolerance", type=float, default=2.0)
+    bf.set_defaults(func=cmd_binance_features)
+
+    # Hourly digest
+    hd = sub.add_parser("hourly-digest", help="Generate hourly digest report")
+    hd.add_argument("--data-dir", default="data/15m")
+    hd.add_argument("--interval-seconds", type=float, default=5.0)
+    hd.add_argument("--format", choices=["json", "human"], default="human")
     hd.set_defaults(func=cmd_hourly_digest)
 
     args = p.parse_args()
