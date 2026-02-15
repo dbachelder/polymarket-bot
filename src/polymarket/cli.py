@@ -1176,6 +1176,110 @@ def cmd_paper_backtest(args: argparse.Namespace) -> None:
         print("=" * 70)
 
 
+def cmd_collect_fills(args: argparse.Namespace) -> None:
+    """Collect fills from paper trading and/or real account."""
+    from pathlib import Path
+
+    from .fills_collector import collect_fills
+
+    fills_path = Path(args.out) / "fills.jsonl" if args.out else Path(args.fills_path)
+    paper_fills_path = Path(args.paper_fills_path) if args.paper_fills_path else None
+
+    # Parse since timestamp
+    since = None
+    if args.since:
+        from datetime import datetime
+        since = datetime.fromisoformat(args.since.replace("Z", "+00:00"))
+
+    result = collect_fills(
+        fills_path=fills_path,
+        paper_fills_path=paper_fills_path,
+        include_account=args.account,
+        include_paper=args.paper,
+        since=since,
+    )
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        print("=" * 70)
+        print("FILLS COLLECTION RESULTS")
+        print("=" * 70)
+        print(f"Fills file:       {result['fills_path']}")
+        print(f"Since:            {result['since'] or 'beginning'}")
+        print(f"Account fills:    {result['account_fills']}")
+        print(f"Paper fills:      {result['paper_fills']}")
+        print(f"Duplicates:       {result['duplicates_skipped']}")
+        print(f"Total appended:   {result['total_appended']}")
+        print("=" * 70)
+
+
+def cmd_pnl_loop(args: argparse.Namespace) -> None:
+    """Run PnL collection and verification loop."""
+    from pathlib import Path
+    from decimal import Decimal
+    from .pnl_loop import collect_and_verify_loop
+
+    collect_and_verify_loop(
+        data_dir=Path(args.data_dir),
+        snapshot_path=Path(args.snapshot) if args.snapshot else None,
+        pnl_dir=Path(args.pnl_dir) if args.pnl_dir else None,
+        interval_seconds=float(args.interval_seconds),
+        verify_time=args.verify_time,
+        starting_cash=Decimal(str(args.starting_cash)) if args.starting_cash else None,
+        include_account=args.account,
+        include_paper=args.paper,
+    )
+
+
+def cmd_pnl_health(args: argparse.Namespace) -> None:
+    """Check health of fills and PnL data."""
+    from pathlib import Path
+    from .pnl_loop import pnl_health_check
+
+    result = pnl_health_check(
+        data_dir=Path(args.data_dir),
+        max_fills_age_seconds=float(args.max_fills_age),
+        max_pnl_age_seconds=float(args.max_pnl_age),
+    )
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        status = "✓ HEALTHY" if result["healthy"] else "✗ UNHEALTHY"
+        print(f"{status}: PnL data health check")
+        print()
+
+        fills = result["fills"]
+        print("--- Fills ---")
+        print(f"  Exists:         {fills['exists']}")
+        print(f"  Total fills:    {fills.get('total_fills', 0)}")
+        print(f"  Last fill:      {fills.get('last_fill_at') or 'N/A'}")
+        if fills.get('age_seconds') is not None:
+            age_hours = fills['age_seconds'] / 3600
+            print(f"  Age:            {age_hours:.1f}h (max: {fills['max_age_seconds']/3600:.1f}h)")
+        print()
+
+        pnl = result["pnl"]
+        print("--- PnL Summaries ---")
+        print(f"  Exists:         {pnl['exists']}")
+        print(f"  Latest file:    {pnl.get('latest_file') or 'N/A'}")
+        print(f"  Latest date:    {pnl.get('latest_date') or 'N/A'}")
+        if pnl.get('age_seconds') is not None:
+            age_hours = pnl['age_seconds'] / 3600
+            print(f"  Age:            {age_hours:.1f}h (max: {pnl['max_age_seconds']/3600:.1f}h)")
+        print()
+
+        if result["warnings"]:
+            print("--- Warnings ---")
+            for warning in result["warnings"]:
+                print(f"  ! {warning}")
+
+    # Exit with error code if unhealthy and --fail is set
+    if args.fail and not result["healthy"]:
+        raise SystemExit(1)
+
+
 def cmd_dataset_join(args: argparse.Namespace) -> None:
     """Align Polymarket 15m snapshots with Binance BTC features for lead/lag analysis."""
     from pathlib import Path
@@ -1566,6 +1670,161 @@ def main() -> None:
         help="Output format",
     )
     pnl.set_defaults(func=cmd_pnl_verify)
+
+    # Collect fills command
+    cf = sub.add_parser(
+        "collect-fills",
+        help="Collect fills from paper trading and/or real account",
+    )
+    cf.add_argument(
+        "--fills-path",
+        default="data/fills.jsonl",
+        help="Output path for fills.jsonl (default: data/fills.jsonl)",
+    )
+    cf.add_argument(
+        "--paper-fills-path",
+        default=None,
+        help="Path to paper trading fills.jsonl (default: data/paper_trading/fills.jsonl)",
+    )
+    cf.add_argument(
+        "--out",
+        default=None,
+        help="Output directory (alternative to --fills-path)",
+    )
+    cf.add_argument(
+        "--since",
+        default=None,
+        help="ISO timestamp to collect from (default: last fill timestamp)",
+    )
+    cf.add_argument(
+        "--account",
+        action="store_true",
+        default=True,
+        help="Include real account fills (default: True)",
+    )
+    cf.add_argument(
+        "--no-account",
+        action="store_false",
+        dest="account",
+        help="Skip account fills",
+    )
+    cf.add_argument(
+        "--paper",
+        action="store_true",
+        default=True,
+        help="Include paper trading fills (default: True)",
+    )
+    cf.add_argument(
+        "--no-paper",
+        action="store_false",
+        dest="paper",
+        help="Skip paper trading fills",
+    )
+    cf.add_argument(
+        "--format",
+        choices=["json", "human"],
+        default="human",
+        help="Output format",
+    )
+    cf.set_defaults(func=cmd_collect_fills)
+
+    # PnL loop command
+    pl = sub.add_parser(
+        "pnl-loop",
+        help="Run continuous PnL collection and verification loop",
+    )
+    pl.add_argument(
+        "--data-dir",
+        default="data",
+        help="Base data directory (default: data)",
+    )
+    pl.add_argument(
+        "--snapshot",
+        default=None,
+        help="Path to snapshot file (default: data/latest_15m.json)",
+    )
+    pl.add_argument(
+        "--pnl-dir",
+        default=None,
+        help="Directory for PnL summaries (default: data/pnl)",
+    )
+    pl.add_argument(
+        "--interval-seconds",
+        type=float,
+        default=3600.0,
+        help="Collection interval in seconds (default: 3600 = 1 hour)",
+    )
+    pl.add_argument(
+        "--verify-time",
+        default=None,
+        help="Time of day to run verification (HH:MM format, e.g., '00:00' for midnight)",
+    )
+    pl.add_argument(
+        "--starting-cash",
+        type=float,
+        default=0.0,
+        help="Starting cash balance",
+    )
+    pl.add_argument(
+        "--account",
+        action="store_true",
+        default=True,
+        help="Include account fills (default: True)",
+    )
+    pl.add_argument(
+        "--no-account",
+        action="store_false",
+        dest="account",
+        help="Skip account fills",
+    )
+    pl.add_argument(
+        "--paper",
+        action="store_true",
+        default=True,
+        help="Include paper fills (default: True)",
+    )
+    pl.add_argument(
+        "--no-paper",
+        action="store_false",
+        dest="paper",
+        help="Skip paper fills",
+    )
+    pl.set_defaults(func=cmd_pnl_loop)
+
+    # PnL health command
+    ph = sub.add_parser(
+        "pnl-health",
+        help="Check health of fills and PnL data",
+    )
+    ph.add_argument(
+        "--data-dir",
+        default="data",
+        help="Data directory (default: data)",
+    )
+    ph.add_argument(
+        "--max-fills-age",
+        type=float,
+        default=86400.0,
+        help="Max fills age in seconds (default: 86400 = 24h)",
+    )
+    ph.add_argument(
+        "--max-pnl-age",
+        type=float,
+        default=86400.0,
+        help="Max PnL summary age in seconds (default: 86400 = 24h)",
+    )
+    ph.add_argument(
+        "--format",
+        choices=["json", "human"],
+        default="human",
+        help="Output format",
+    )
+    ph.add_argument(
+        "--fail",
+        action="store_true",
+        help="Exit with error code if unhealthy",
+    )
+    ph.set_defaults(func=cmd_pnl_health)
 
     ms = sub.add_parser("microstructure", help="Analyze market microstructure from snapshot")
     ms.add_argument(
