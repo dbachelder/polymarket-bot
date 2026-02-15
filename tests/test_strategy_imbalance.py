@@ -596,6 +596,7 @@ class TestBacktestResult:
             mid_yes=0.60,
             entry_price=0.62,
             confidence=0.70,
+            prob_up=0.85,
         )
 
         from polymarket.strategy_imbalance import BacktestResult

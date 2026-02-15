@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -254,6 +254,96 @@ def load_snapshots_for_backtest(
     return filtered
 
 
+def _parse_snapshot_timestamp(snap_path: Path) -> datetime | None:
+    """Parse timestamp from snapshot filename.
+
+    Format: snapshot_15m_20260215T040615Z.json
+    """
+    try:
+        ts_str = snap_path.stem.split("_")[2]
+        return datetime.strptime(ts_str, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+    except (IndexError, ValueError):
+        return None
+
+
+def _find_future_snapshot(
+    current_path: Path,
+    snapshots: list[Path],
+    horizon: int,
+) -> Path | None:
+    """Find the snapshot N steps ahead (horizon) from current.
+
+    Args:
+        current_path: Current snapshot path
+        snapshots: Sorted list of all snapshot paths
+        horizon: Number of snapshots to look ahead
+
+    Returns:
+        Future snapshot path or None if not found
+    """
+    try:
+        current_idx = snapshots.index(current_path)
+        future_idx = current_idx + horizon
+        if future_idx < len(snapshots):
+            return snapshots[future_idx]
+    except ValueError:
+        pass
+    return None
+
+
+def _get_mid_price_from_snapshot(
+    snapshot_path: Path,
+    market_id: str,
+    target_market_substring: str,
+) -> float | None:
+    """Extract mid price for a specific market from a snapshot.
+
+    Args:
+        snapshot_path: Path to snapshot file
+        market_id: Market ID to look for
+        target_market_substring: Fallback filter if market_id not found
+
+    Returns:
+        Mid price or None if not found
+    """
+    try:
+        data = json.loads(snapshot_path.read_text())
+        markets = data.get("markets", [])
+
+        for market in markets:
+            if market.get("market_id") == market_id:
+                books = market.get("books", {})
+                yes_book = books.get("yes", {})
+                bids = yes_book.get("bids", [])
+                asks = yes_book.get("asks", [])
+
+                if bids and asks:
+                    best_bid = _to_float(sorted(bids, key=lambda x: _to_float(x["price"]), reverse=True)[0]["price"])
+                    best_ask = _to_float(sorted(asks, key=lambda x: _to_float(x["price"]))[0]["price"])
+                    return (best_bid + best_ask) / 2
+                return None
+
+        # Fallback: try by substring match
+        for market in markets:
+            title = market.get("title", market.get("question", ""))
+            if target_market_substring.lower() in title.lower():
+                books = market.get("books", {})
+                yes_book = books.get("yes", {})
+                bids = yes_book.get("bids", [])
+                asks = yes_book.get("asks", [])
+
+                if bids and asks:
+                    best_bid = _to_float(sorted(bids, key=lambda x: _to_float(x["price"]), reverse=True)[0]["price"])
+                    best_ask = _to_float(sorted(asks, key=lambda x: _to_float(x["price"]))[0]["price"])
+                    return (best_bid + best_ask) / 2
+                return None
+
+    except (json.JSONDecodeError, FileNotFoundError, KeyError, IndexError):
+        pass
+
+    return None
+
+
 @dataclass(frozen=True)
 class TradeDecision:
     """A trading decision from the strategy."""
@@ -266,20 +356,32 @@ class TradeDecision:
     imbalance_value: float
     mid_yes: float
     entry_price: float  # Pessimistic fill price
-    confidence: float  # How extreme the imbalance is
+    confidence: float  # How extreme the imbalance is (0-1)
+    prob_up: float  # Model probability of UP (derived from imbalance)
+
+    # Outcome tracking (filled in after backtest)
+    outcome_up: bool | None = None  # True if market went UP
+    pnl: float | None = None  # PnL for this trade
+    horizon_return: float | None = None  # Return over horizon
 
 
-@dataclass(frozen=True)
+@dataclass
 class BacktestResult:
     """Results from a backtest run."""
 
     trades: list[TradeDecision]
-    metrics: dict[str, Any]
+    metrics: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
-        return {
-            "trades": [
+    def to_dict(self, include_trades: bool = True) -> dict[str, Any]:
+        """Convert to dictionary for JSON serialization.
+
+        Args:
+            include_trades: Whether to include full trade list
+        """
+        result = {"metrics": self.metrics}
+
+        if include_trades:
+            result["trades"] = [
                 {
                     "timestamp": t.timestamp.isoformat(),
                     "market_id": t.market_id,
@@ -290,11 +392,98 @@ class BacktestResult:
                     "mid_yes": t.mid_yes,
                     "entry_price": t.entry_price,
                     "confidence": t.confidence,
+                    "prob_up": t.prob_up,
+                    "outcome_up": t.outcome_up,
+                    "pnl": t.pnl,
+                    "horizon_return": t.horizon_return,
                 }
                 for t in self.trades
-            ],
-            "metrics": self.metrics,
-        }
+            ]
+
+        return result
+
+
+def _compute_prob_up(imbalance: float, theta: float) -> float:
+    """Convert imbalance to probability of UP.
+
+    Maps imbalance [0, 1] to probability [0, 1] where:
+    - imbalance = 0.5 -> prob = 0.5 (neutral)
+    - imbalance > 0.5 -> prob > 0.5 (UP bias)
+    - imbalance < 0.5 -> prob < 0.5 (DOWN bias)
+
+    Uses a scaled logistic-like mapping centered at 0.5.
+    """
+    # Scale imbalance to [-1, 1] range centered at 0.5
+    scaled = (imbalance - 0.5) * 2
+    # Map to probability using sigmoid-like function
+    # This gives prob=0.5 at imbalance=0.5, and stretches toward extremes
+    prob = 0.5 + scaled * 0.5  # Linear mapping for simplicity
+    return max(0.01, min(0.99, prob))  # Clamp to avoid 0/1
+
+
+def _compute_pnl(
+    decision: str,
+    entry_price: float,
+    exit_price: float,
+    fee_bps: float = 50.0,
+    slippage_bps: float = 10.0,
+) -> float:
+    """Compute PnL for a trade including fees and slippage.
+
+    Args:
+        decision: 'UP' or 'DOWN'
+        entry_price: Entry price (0-1)
+        exit_price: Exit price (0-1)
+        fee_bps: Taker fee in basis points (default 50 = 0.5%)
+        slippage_bps: Slippage in basis points (default 10 = 0.1%)
+
+    Returns:
+        PnL as decimal (e.g., 0.05 = 5% profit)
+    """
+    # Convert bps to decimal
+    fee = fee_bps / 10000.0
+    slippage = slippage_bps / 10000.0
+
+    # Total cost to enter and exit
+    total_cost = 2 * fee + 2 * slippage
+
+    if decision == "UP":
+        # Buy YES at entry, sell at exit
+        gross_return = exit_price - entry_price
+    elif decision == "DOWN":
+        # Buy NO at (1-entry), sell at (1-exit)
+        # Equivalent to: entry - exit (since YES price went down)
+        gross_return = entry_price - exit_price
+    else:
+        return 0.0
+
+    net_pnl = gross_return - total_cost
+    return net_pnl
+
+
+def _compute_brier_score(prob_up: float, outcome_up: bool) -> float:
+    """Compute Brier score for a probability forecast.
+
+    Brier score = (prob - outcome)^2 where outcome is 1 or 0.
+    Lower is better (0 = perfect, 1 = worst).
+    """
+    outcome = 1.0 if outcome_up else 0.0
+    return (prob_up - outcome) ** 2
+
+
+def _compute_log_loss(prob_up: float, outcome_up: bool) -> float:
+    """Compute log loss for a probability forecast.
+
+    Log loss = -[outcome * log(prob) + (1-outcome) * log(1-prob)]
+    Lower is better.
+    """
+    import math
+
+    # Clamp probabilities to avoid log(0)
+    prob = max(0.0001, min(0.9999, prob_up))
+    outcome = 1.0 if outcome_up else 0.0
+
+    return -(outcome * math.log(prob) + (1 - outcome) * math.log(1 - prob))
 
 
 def run_backtest(
@@ -303,8 +492,11 @@ def run_backtest(
     theta: float = 0.70,
     p_max: float = 0.65,
     target_market_substring: str = "bitcoin",
+    horizon: int = 1,
+    fee_bps: float = 50.0,
+    slippage_bps: float = 10.0,
 ) -> BacktestResult:
-    """Run backtest on historical snapshots.
+    """Run backtest on historical snapshots with outcome tracking.
 
     Decision rule (one-parameter family):
     - go UP if imbalance_k > theta and midYes < pMax (avoid paying 0.70+)
@@ -312,21 +504,27 @@ def run_backtest(
     - otherwise no-trade
 
     Entry price assumption: pessimistic (buy at ask for chosen side)
-    Exit: hold to expiry (outcome determined by market resolution)
+    Exit: evaluated at horizon snapshots ahead
 
     Args:
-        snapshots: List of snapshot file paths
+        snapshots: List of snapshot file paths (must be sorted by time)
         k: Number of depth levels for imbalance (1, 3, or 5)
         theta: Imbalance threshold (0.5 to 1.0)
         p_max: Max price to pay for position (avoid expensive skewed contracts)
         target_market_substring: Filter for BTC markets
+        horizon: Number of snapshots ahead to evaluate outcome (default 1)
+        fee_bps: Taker fee in basis points (default 50 = 0.5%)
+        slippage_bps: Slippage in basis points (default 10 = 0.1%)
 
     Returns:
-        BacktestResult with trades and metrics
+        BacktestResult with trades and performance metrics
     """
     trades: list[TradeDecision] = []
 
-    for snap_path in snapshots:
+    # Pre-sort snapshots by timestamp
+    sorted_snapshots = sorted(snapshots, key=lambda p: _parse_snapshot_timestamp(p) or datetime.min.replace(tzinfo=UTC))
+
+    for snap_path in sorted_snapshots:
         features_list = extract_features_from_snapshot(snap_path, target_market_substring)
 
         for feat in features_list:
@@ -344,6 +542,7 @@ def run_backtest(
             decision = "NO_TRADE"
             entry_price = feat.mid_yes
             confidence = abs(imbalance - 0.5) * 2  # Scale to 0-1
+            prob_up = _compute_prob_up(imbalance, theta)
 
             # Go UP if imbalance > theta and mid < p_max
             if imbalance > theta and feat.mid_yes < p_max:
@@ -356,6 +555,21 @@ def run_backtest(
                 entry_price = 1.0 - feat.best_ask_yes  # NO price
 
             if decision != "NO_TRADE":
+                # Find outcome at horizon
+                future_snap = _find_future_snapshot(snap_path, sorted_snapshots, horizon)
+                outcome_up = None
+                horizon_return = None
+                pnl = None
+
+                if future_snap:
+                    exit_price = _get_mid_price_from_snapshot(
+                        future_snap, feat.market_id, target_market_substring
+                    )
+                    if exit_price is not None:
+                        outcome_up = exit_price > feat.mid_yes
+                        horizon_return = exit_price - feat.mid_yes if decision == "UP" else feat.mid_yes - exit_price
+                        pnl = _compute_pnl(decision, entry_price, exit_price, fee_bps, slippage_bps)
+
                 trades.append(
                     TradeDecision(
                         timestamp=feat.timestamp,
@@ -367,23 +581,110 @@ def run_backtest(
                         mid_yes=feat.mid_yes,
                         entry_price=entry_price,
                         confidence=confidence,
+                        prob_up=prob_up,
+                        outcome_up=outcome_up,
+                        pnl=pnl,
+                        horizon_return=horizon_return,
                     )
                 )
 
     # Compute metrics
+    return _compute_metrics(trades, k, theta, p_max, horizon, fee_bps, slippage_bps)
+
+
+def _compute_metrics(
+    trades: list[TradeDecision],
+    k: int,
+    theta: float,
+    p_max: float,
+    horizon: int,
+    fee_bps: float,
+    slippage_bps: float,
+) -> BacktestResult:
+    """Compute comprehensive metrics from trades."""
     up_trades = [t for t in trades if t.decision == "UP"]
     down_trades = [t for t in trades if t.decision == "DOWN"]
 
+    # Hit rate (accuracy) - only for trades with known outcomes
+    trades_with_outcome = [t for t in trades if t.outcome_up is not None]
+    correct_trades = [
+        t for t in trades_with_outcome
+        if (t.decision == "UP" and t.outcome_up) or (t.decision == "DOWN" and not t.outcome_up)
+    ]
+    hit_rate = len(correct_trades) / len(trades_with_outcome) if trades_with_outcome else 0.0
+
+    # Direction-specific hit rates
+    up_correct = [t for t in up_trades if t.outcome_up is True]
+    down_correct = [t for t in down_trades if t.outcome_up is False]
+    up_with_outcome = [t for t in up_trades if t.outcome_up is not None]
+    down_with_outcome = [t for t in down_trades if t.outcome_up is not None]
+    up_hit_rate = len(up_correct) / len(up_with_outcome) if up_with_outcome else 0.0
+    down_hit_rate = len(down_correct) / len(down_with_outcome) if down_with_outcome else 0.0
+
+    # Brier score (probability calibration)
+    brier_scores = []
+    for t in trades_with_outcome:
+        if t.outcome_up is not None:
+            brier_scores.append(_compute_brier_score(t.prob_up, t.outcome_up))
+    avg_brier = np.mean(brier_scores) if brier_scores else 0.0
+
+    # Log loss
+    log_losses = []
+    for t in trades_with_outcome:
+        if t.outcome_up is not None:
+            log_losses.append(_compute_log_loss(t.prob_up, t.outcome_up))
+    avg_log_loss = np.mean(log_losses) if log_losses else 0.0
+
+    # PnL metrics
+    trades_with_pnl = [t for t in trades if t.pnl is not None]
+    pnls = [t.pnl for t in trades_with_pnl]
+    total_pnl = sum(pnls) if pnls else 0.0
+    avg_pnl = np.mean(pnls) if pnls else 0.0
+    sharpe = np.mean(pnls) / np.std(pnls) if pnls and np.std(pnls) > 0 else 0.0
+
+    # Win rate (positive PnL)
+    winning_trades = [t for t in trades_with_pnl if t.pnl and t.pnl > 0]
+    win_rate = len(winning_trades) / len(trades_with_pnl) if trades_with_pnl else 0.0
+
+    # Expected value per trade
+    ev_per_trade = avg_pnl
+
     metrics = {
+        # Trade counts
         "total_trades": len(trades),
         "up_trades": len(up_trades),
         "down_trades": len(down_trades),
+        "trades_with_outcome": len(trades_with_outcome),
+        "trades_with_pnl": len(trades_with_pnl),
+
+        # Accuracy metrics
+        "hit_rate": hit_rate,
+        "up_hit_rate": up_hit_rate,
+        "down_hit_rate": down_hit_rate,
+
+        # Calibration metrics
+        "avg_brier_score": avg_brier,
+        "avg_log_loss": avg_log_loss,
+
+        # PnL metrics
+        "total_pnl": total_pnl,
+        "avg_pnl": avg_pnl,
+        "win_rate": win_rate,
+        "ev_per_trade": ev_per_trade,
+        "sharpe_ratio": sharpe,
+
+        # Legacy metrics
         "avg_confidence": np.mean([t.confidence for t in trades]) if trades else 0,
         "avg_entry_price": np.mean([t.entry_price for t in trades]) if trades else 0,
+
+        # Parameters
         "params": {
             "k": k,
             "theta": theta,
             "p_max": p_max,
+            "horizon": horizon,
+            "fee_bps": fee_bps,
+            "slippage_bps": slippage_bps,
         },
     }
 
@@ -396,6 +697,9 @@ def parameter_sweep(
     theta_values: list[float] | None = None,
     p_max_values: list[float] | None = None,
     target_market_substring: str = "bitcoin",
+    horizon: int = 1,
+    fee_bps: float = 50.0,
+    slippage_bps: float = 10.0,
 ) -> list[dict[str, Any]]:
     """Sweep parameter space and return results for each combination.
 
@@ -405,9 +709,12 @@ def parameter_sweep(
         theta_values: List of theta values (default: [0.60, 0.65, 0.70, 0.75])
         p_max_values: List of p_max values (default: [0.60, 0.65])
         target_market_substring: Filter for BTC markets
+        horizon: Number of snapshots ahead to evaluate outcome
+        fee_bps: Taker fee in basis points
+        slippage_bps: Slippage in basis points
 
     Returns:
-        List of result dicts sorted by trade count (descending)
+        List of result dicts sorted by total PnL (descending)
     """
     if k_values is None:
         k_values = [1, 3, 5]
@@ -427,16 +734,19 @@ def parameter_sweep(
                     theta=theta,
                     p_max=p_max,
                     target_market_substring=target_market_substring,
+                    horizon=horizon,
+                    fee_bps=fee_bps,
+                    slippage_bps=slippage_bps,
                 )
 
                 results.append(
                     {
-                        "params": {"k": k, "theta": theta, "p_max": p_max},
+                        "params": result.metrics["params"],
                         "metrics": result.metrics,
                     }
                 )
 
-    # Sort by trade count descending
-    results.sort(key=lambda x: x["metrics"]["total_trades"], reverse=True)
+    # Sort by total PnL descending (better than trade count for evaluating performance)
+    results.sort(key=lambda x: x["metrics"]["total_pnl"], reverse=True)
 
     return results
