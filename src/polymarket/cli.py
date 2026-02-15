@@ -832,6 +832,25 @@ def cmd_both_sides_stats(args: argparse.Namespace) -> None:
         print("=" * 80)
 
 
+def cmd_combinatorial_scan(args: argparse.Namespace) -> None:
+    """Scan for combinatorial arbitrage (Dutch book) opportunities."""
+    from .combinatorial import run_combinatorial_scan
+
+    result = run_combinatorial_scan(
+        event_limit=args.event_limit,
+        fee_rate=args.fee_rate,
+        min_edge=args.min_edge,
+        max_basket_size=args.max_basket_size,
+        min_liquidity=args.min_liquidity,
+        detailed=args.detailed,
+    )
+
+    if args.format == "json":
+        print(json.dumps(result["result"], indent=2))
+    else:
+        print(result["report"])
+
+
 def cmd_mention_scan(args: argparse.Namespace) -> None:
     """Scan for mention market opportunities with default-to-NO strategy."""
     from pathlib import Path
@@ -2052,6 +2071,48 @@ def main() -> None:
         "--format", choices=["json", "human"], default="human", help="Output format"
     )
     paper_bt.set_defaults(func=cmd_paper_backtest)
+    # Combinatorial arbitrage command
+    cb = sub.add_parser(
+        "combinatorial-scan",
+        help="Scan for combinatorial arbitrage (Dutch book) opportunities",
+    )
+    cb.add_argument(
+        "--event-limit",
+        type=int,
+        default=100,
+        help="Maximum events to scan (default: 100)",
+    )
+    cb.add_argument(
+        "--fee-rate",
+        type=float,
+        default=0.0315,
+        help="Settlement fee rate (default: 0.0315 = 3.15%%)",
+    )
+    cb.add_argument(
+        "--min-edge",
+        type=float,
+        default=0.015,
+        help="Minimum edge after fees (default: 0.015 = 1.5%%)",
+    )
+    cb.add_argument(
+        "--max-basket-size",
+        type=int,
+        default=4,
+        help="Maximum outcomes per basket (default: 4)",
+    )
+    cb.add_argument(
+        "--min-liquidity",
+        type=float,
+        default=100.0,
+        help="Minimum liquidity per outcome (default: 100)",
+    )
+    cb.add_argument(
+        "--detailed",
+        action="store_true",
+        help="Show detailed output for all baskets",
+    )
+    cb.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    cb.set_defaults(func=cmd_combinatorial_scan)
 
     args = p.parse_args()
 
