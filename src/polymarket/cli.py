@@ -399,6 +399,35 @@ def cmd_binance_features(args: argparse.Namespace) -> None:
     print(f"Aligned {len(aligned)} records to {out_path}")
 
 
+def cmd_dataset_join(args: argparse.Namespace) -> None:
+    """Build aligned dataset and compute lead/lag correlations."""
+    from pathlib import Path
+
+    from .dataset_join import build_aligned_dataset, save_report
+
+    polymarket_dir = Path(args.polymarket_dir)
+    binance_dir = Path(args.binance_dir)
+    out_path = Path(args.out)
+
+    report = build_aligned_dataset(
+        polymarket_data_dir=polymarket_dir,
+        binance_data_dir=binance_dir,
+        hours=float(args.hours),
+        tolerance_seconds=float(args.tolerance),
+    )
+
+    text_path = out_path.with_suffix(".txt") if args.text else None
+    json_path, txt_path = save_report(report, out_path, text_path)
+
+    if args.format == "json":
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(report.to_text())
+        print(f"\nJSON report saved: {json_path}")
+        if txt_path:
+            print(f"Text report saved: {txt_path}")
+
+
 def cmd_health_check(args: argparse.Namespace) -> None:
     """Check collector health and staleness SLA."""
     from pathlib import Path
@@ -746,6 +775,33 @@ def main() -> None:
     bf.add_argument("--out", default="data/aligned_features.json", help="Output file")
     bf.add_argument("--tolerance", type=float, default=1.0, help="Alignment tolerance in seconds")
     bf.set_defaults(func=cmd_binance_features)
+
+    dj = sub.add_parser(
+        "dataset-join",
+        help="Build aligned dataset and compute lead/lag correlations (BTC vs PM 15m)",
+    )
+    dj.add_argument(
+        "--polymarket-dir", default="data", help="Polymarket data directory (default: data)"
+    )
+    dj.add_argument(
+        "--binance-dir", default="data/binance", help="Binance data directory (default: data/binance)"
+    )
+    dj.add_argument(
+        "--hours", type=float, default=24.0, help="Hours of data to analyze (default: 24)"
+    )
+    dj.add_argument(
+        "--tolerance", type=float, default=5.0, help="Alignment tolerance in seconds (default: 5)"
+    )
+    dj.add_argument(
+        "--out", default="data/join_report.json", help="Output JSON file (default: data/join_report.json)"
+    )
+    dj.add_argument(
+        "--text", action="store_true", help="Also save human-readable text report"
+    )
+    dj.add_argument(
+        "--format", choices=["json", "human"], default="human", help="Console output format"
+    )
+    dj.set_defaults(func=cmd_dataset_join)
 
     hc = sub.add_parser("health-check", help="Check collector health and staleness SLA")
     hc.add_argument("--data-dir", default="data", help="Data directory containing snapshots")
