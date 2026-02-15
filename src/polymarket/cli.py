@@ -20,7 +20,6 @@ def cmd_markets_5m(args: argparse.Namespace) -> None:
     _print({"count": len(out), "markets": out})
 
 
-
 def cmd_book(args: argparse.Namespace) -> None:
     book = clob.get_book(args.token_id)
     _print(book)
