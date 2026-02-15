@@ -772,6 +772,36 @@ def cmd_mention_scan(args: argparse.Namespace) -> None:
         print("\n" + "=" * 70)
 
 
+def cmd_watchdog(args: argparse.Namespace) -> None:
+    """Run collector watchdog to ensure data freshness."""
+    from pathlib import Path
+
+    from .watchdog import run_watchdog
+
+    result = run_watchdog(
+        data_dir=Path(args.data_dir),
+        max_age_seconds=float(args.max_age_seconds),
+        dry_run=args.dry_run,
+        script_path=Path(args.script) if args.script else None,
+    )
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        status = "✓ FRESH" if result["fresh"] else "✗ STALE"
+        print(f"{status}: {result['message']}")
+        if result["age_seconds"] is not None:
+            print(f"  Age: {result['age_seconds']:.1f}s (max: {args.max_age_seconds}s)")
+        print(f"  Collector running: {result['collector_running']}")
+        if result["collector_pid"]:
+            print(f"  PID: {result['collector_pid']}")
+        print(f"  Action: {result['action_taken']}")
+
+    # Exit with error code if data is stale and --fail is set
+    if args.fail and not result["fresh"]:
+        raise SystemExit(1)
+
+
 def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
     """Run orderbook imbalance strategy backtest."""
     from pathlib import Path
@@ -1143,6 +1173,31 @@ def main() -> None:
     bf.add_argument("--tolerance", type=float, default=1.0, help="Alignment tolerance in seconds")
     bf.set_defaults(func=cmd_binance_features)
 
+    wd = sub.add_parser(
+        "watchdog",
+        help="Run collector watchdog to ensure data freshness and auto-restart",
+    )
+    wd.add_argument("--data-dir", default="data", help="Data directory containing snapshots")
+    wd.add_argument(
+        "--max-age-seconds",
+        type=float,
+        default=120.0,
+        help="Max acceptable snapshot age (default: 120s)",
+    )
+    wd.add_argument(
+        "--script",
+        default=None,
+        help="Path to run.sh script (default: auto-detect)",
+    )
+    wd.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would happen without taking action",
+    )
+    wd.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    wd.add_argument("--fail", action="store_true", help="Exit with error code if data is stale")
+    wd.set_defaults(func=cmd_watchdog)
+
     hc = sub.add_parser("health-check", help="Check collector health and staleness SLA")
     hc.add_argument("--data-dir", default="data", help="Data directory containing snapshots")
     hc.add_argument(
@@ -1268,13 +1323,13 @@ def main() -> None:
         "--min-gross-spread",
         type=float,
         default=0.01,
-        help="Minimum gross spread before fees (default: 0.01 = 1%)",
+        help="Minimum gross spread before fees (default: 0.01 = 1%%)",
     )
     cm.add_argument(
         "--min-net-spread",
         type=float,
         default=0.005,
-        help="Minimum net spread after fees (default: 0.005 = 0.5%)",
+        help="Minimum net spread after fees (default: 0.005 = 0.5%%)",
     )
     cm.add_argument(
         "--max-positions",
