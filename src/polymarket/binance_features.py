@@ -493,13 +493,15 @@ def align_to_polymarket_snapshots(
 
             features = builder.build_features(trades, pm_time_ms)
 
-            aligned.append({
-                "polymarket_timestamp": pm_time_str,
-                "binance_timestamp": closest.get("timestamp"),
-                "time_diff_seconds": min_diff,
-                "polymarket_data": pm_snap,
-                "binance_features": features.to_dict(),
-            })
+            aligned.append(
+                {
+                    "polymarket_timestamp": pm_time_str,
+                    "binance_timestamp": closest.get("timestamp"),
+                    "time_diff_seconds": min_diff,
+                    "polymarket_data": pm_snap,
+                    "binance_features": features.to_dict(),
+                }
+            )
 
     return aligned
 

@@ -136,8 +136,7 @@ def check_alerts(
     no_spread = no_metrics.get("spread")
     if no_spread is not None and no_spread > spread_threshold:
         alerts.append(
-            f"[{market_title}] NO spread alert: {no_spread:.2f} "
-            f"(threshold: {spread_threshold:.2f})"
+            f"[{market_title}] NO spread alert: {no_spread:.2f} (threshold: {spread_threshold:.2f})"
         )
 
     # Check for extreme pinning (best bid at floor or best ask at ceiling)
@@ -264,9 +263,7 @@ def generate_microstructure_summary(
     Returns:
         Dict with summary statistics and alerts
     """
-    analyses = analyze_snapshot_microstructure(
-        snapshot_path, target_market_substring, depth_levels
-    )
+    analyses = analyze_snapshot_microstructure(snapshot_path, target_market_substring, depth_levels)
 
     all_alerts = []
     market_summaries = []

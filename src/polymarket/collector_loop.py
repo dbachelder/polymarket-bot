@@ -39,6 +39,109 @@ def _prune_old_files(out_dir: Path, prefix: str, retention_hours: float) -> int:
     return deleted
 
 
+def _prune_by_count(out_dir: Path, prefix: str, max_snapshots: int) -> int:
+    """Prune oldest snapshots to keep only max_snapshots most recent.
+
+    Args:
+        out_dir: Directory containing snapshots
+        prefix: File prefix to match (e.g., 'snapshot_15m')
+        max_snapshots: Maximum number of snapshots to retain
+
+    Returns:
+        Number of files deleted
+    """
+    if max_snapshots <= 0:
+        return 0
+
+    snapshots: list[tuple[Path, datetime]] = []
+    for p in out_dir.glob(f"{prefix}_*.json"):
+        try:
+            mtime = datetime.fromtimestamp(p.stat().st_mtime, tz=UTC)
+            snapshots.append((p, mtime))
+        except FileNotFoundError:
+            continue
+
+    if len(snapshots) <= max_snapshots:
+        return 0
+
+    # Sort by mtime, oldest first
+    snapshots.sort(key=lambda x: x[1])
+
+    deleted = 0
+    to_delete = len(snapshots) - max_snapshots
+    for p, _ in snapshots[:to_delete]:
+        try:
+            p.unlink()
+            deleted += 1
+        except FileNotFoundError:
+            pass
+    return deleted
+
+
+def get_latest_snapshot_age_seconds(out_dir: Path, prefix: str = "snapshot_15m") -> float | None:
+    """Get age of the most recent snapshot in seconds.
+
+    Args:
+        out_dir: Directory containing snapshots
+        prefix: File prefix to match
+
+    Returns:
+        Age in seconds, or None if no snapshots found
+    """
+    latest_mtime: datetime | None = None
+
+    for p in out_dir.glob(f"{prefix}_*.json"):
+        try:
+            mtime = datetime.fromtimestamp(p.stat().st_mtime, tz=UTC)
+            if latest_mtime is None or mtime > latest_mtime:
+                latest_mtime = mtime
+        except FileNotFoundError:
+            continue
+
+    if latest_mtime is None:
+        return None
+
+    return (datetime.now(UTC) - latest_mtime).total_seconds()
+
+
+def check_staleness_sla(
+    out_dir: Path, max_age_seconds: float = 120.0, prefix: str = "snapshot_15m"
+) -> dict:
+    """Check if latest snapshot meets staleness SLA.
+
+    Args:
+        out_dir: Directory containing snapshots
+        max_age_seconds: Maximum acceptable age in seconds (default: 120s = 2 min)
+        prefix: File prefix to match
+
+    Returns:
+        Dict with health status:
+        - healthy: bool
+        - age_seconds: float | None
+        - max_age_seconds: float
+        - message: str
+    """
+    age_seconds = get_latest_snapshot_age_seconds(out_dir, prefix)
+
+    if age_seconds is None:
+        return {
+            "healthy": False,
+            "age_seconds": None,
+            "max_age_seconds": max_age_seconds,
+            "message": f"No snapshots found in {out_dir} with prefix {prefix}",
+        }
+
+    healthy = age_seconds <= max_age_seconds
+    message = f"Snapshot age {age_seconds:.1f}s {'OK' if healthy else 'EXCEEDS'} SLA {max_age_seconds:.1f}s"
+
+    return {
+        "healthy": healthy,
+        "age_seconds": age_seconds,
+        "max_age_seconds": max_age_seconds,
+        "message": message,
+    }
+
+
 def _run_microstructure_analysis(
     snapshot_path: Path,
     out_dir: Path,
@@ -82,9 +185,10 @@ def _run_microstructure_analysis(
 
 def collect_15m_loop(
     out_dir: Path,
-    interval_seconds: float = 5.0,
+    interval_seconds: float = 60.0,
     max_backoff_seconds: float = 60.0,
-    retention_hours: float | None = None,
+    retention_hours: float | None = 24.0,
+    max_snapshots: int | None = 1440,
     microstructure_interval_seconds: float = 60.0,
     microstructure_target: str | None = "bitcoin",
     spread_alert_threshold: float = DEFAULT_SPREAD_ALERT_THRESHOLD,
@@ -98,9 +202,10 @@ def collect_15m_loop(
 
     Args:
         out_dir: Directory to write snapshots
-        interval_seconds: Seconds between snapshots
+        interval_seconds: Seconds between snapshots (default: 60s for continuous polling)
         max_backoff_seconds: Maximum backoff on errors
-        retention_hours: Hours to retain old snapshots (None = keep forever)
+        retention_hours: Hours to retain old snapshots (default: 24h)
+        max_snapshots: Max number of snapshots to retain (default: 1440 ~= 24h at 60s intervals)
         microstructure_interval_seconds: Seconds between microstructure analyses
         microstructure_target: Substring to filter markets (e.g., 'bitcoin')
         spread_alert_threshold: Alert threshold for spread
@@ -123,13 +228,39 @@ def collect_15m_loop(
             # Touch a small sidecar "latest" pointer (handy for tailing)
             latest = out_dir / "latest_15m.json"
             latest.write_text(
-                json.dumps({"path": str(snapshot_path), "generated_at": datetime.now(UTC).isoformat()})
+                json.dumps(
+                    {"path": str(snapshot_path), "generated_at": datetime.now(UTC).isoformat()}
+                )
             )
 
             backoff = base
 
+            # Log snapshot age metric
+            age_seconds = get_latest_snapshot_age_seconds(out_dir, prefix="snapshot_15m")
+            if age_seconds is not None:
+                logger.info("snapshot_age_seconds=%.1f path=%s", age_seconds, snapshot_path.name)
+
+            # Prune old snapshots by age
             if retention_hours is not None:
-                _prune_old_files(out_dir, prefix="snapshot_15m", retention_hours=float(retention_hours))
+                deleted = _prune_old_files(
+                    out_dir, prefix="snapshot_15m", retention_hours=float(retention_hours)
+                )
+                if deleted > 0:
+                    logger.info(
+                        "pruned_old_snapshots count=%d retention_hours=%.1f",
+                        deleted,
+                        retention_hours,
+                    )
+
+            # Prune by count to prevent unbounded growth
+            if max_snapshots is not None:
+                deleted = _prune_by_count(
+                    out_dir, prefix="snapshot_15m", max_snapshots=max_snapshots
+                )
+                if deleted > 0:
+                    logger.info(
+                        "pruned_excess_snapshots count=%d max_snapshots=%d", deleted, max_snapshots
+                    )
 
             # Run microstructure analysis if enough time has passed
             if started - last_microstructure_run >= microstructure_interval_seconds:
@@ -146,7 +277,12 @@ def collect_15m_loop(
                 except Exception:
                     logger.exception("Microstructure analysis failed")
 
-        except (httpx.HTTPStatusError, httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as e:
+        except (
+            httpx.HTTPStatusError,
+            httpx.ConnectError,
+            httpx.ReadTimeout,
+            httpx.RemoteProtocolError,
+        ) as e:
             # httpx raises HTTPStatusError only if raise_for_status() was called.
             status = getattr(getattr(e, "response", None), "status_code", None)
             is_retryable = status in (429, 500, 502, 503, 504) or status is None
@@ -192,9 +328,16 @@ def collect_5m_loop(
             backoff = base
 
             if retention_hours is not None:
-                _prune_old_files(out_dir, prefix="snapshot_5m", retention_hours=float(retention_hours))
+                _prune_old_files(
+                    out_dir, prefix="snapshot_5m", retention_hours=float(retention_hours)
+                )
 
-        except (httpx.HTTPStatusError, httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as e:
+        except (
+            httpx.HTTPStatusError,
+            httpx.ConnectError,
+            httpx.ReadTimeout,
+            httpx.RemoteProtocolError,
+        ) as e:
             # httpx raises HTTPStatusError only if raise_for_status() was called.
             status = getattr(getattr(e, "response", None), "status_code", None)
             is_retryable = status in (429, 500, 502, 503, 504) or status is None
