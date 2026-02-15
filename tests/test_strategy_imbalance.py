@@ -275,7 +275,9 @@ class TestLoadSnapshotsForBacktest:
         start = datetime(2026, 2, 14, 11, 0, 0, tzinfo=UTC)
         end = datetime(2026, 2, 14, 13, 0, 0, tzinfo=UTC)
 
-        results = load_snapshots_for_backtest(tmp_path, interval="15m", start_time=start, end_time=end)
+        results = load_snapshots_for_backtest(
+            tmp_path, interval="15m", start_time=start, end_time=end
+        )
 
         assert len(results) == 1
         assert "120000" in str(results[0])
@@ -540,7 +542,9 @@ class TestParameterSweep:
         assert len(results) == 8
 
         # All combinations should be present
-        params_seen = [(r["params"]["k"], r["params"]["theta"], r["params"]["p_max"]) for r in results]
+        params_seen = [
+            (r["params"]["k"], r["params"]["theta"], r["params"]["p_max"]) for r in results
+        ]
         assert (1, 0.60, 0.60) in params_seen
         assert (3, 0.70, 0.65) in params_seen
 

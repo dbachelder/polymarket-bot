@@ -565,8 +565,22 @@ class TestComputePnL:
 
     def test_simple_buy_sell(self):
         fills = [
-            Fill("token1", "buy", Decimal("100"), Decimal("0.50"), Decimal("1"), "2024-01-01T00:00:00Z"),
-            Fill("token1", "sell", Decimal("100"), Decimal("0.60"), Decimal("1"), "2024-01-01T01:00:00Z"),
+            Fill(
+                "token1",
+                "buy",
+                Decimal("100"),
+                Decimal("0.50"),
+                Decimal("1"),
+                "2024-01-01T00:00:00Z",
+            ),
+            Fill(
+                "token1",
+                "sell",
+                Decimal("100"),
+                Decimal("0.60"),
+                Decimal("1"),
+                "2024-01-01T01:00:00Z",
+            ),
         ]
 
         report = compute_pnl(fills)
@@ -577,7 +591,14 @@ class TestComputePnL:
 
     def test_unrealized_pnl(self):
         fills = [
-            Fill("token1", "buy", Decimal("100"), Decimal("0.50"), Decimal("1"), "2024-01-01T00:00:00Z"),
+            Fill(
+                "token1",
+                "buy",
+                Decimal("100"),
+                Decimal("0.50"),
+                Decimal("1"),
+                "2024-01-01T00:00:00Z",
+            ),
         ]
 
         current_prices = {"token1": Decimal("0.60")}
@@ -590,8 +611,22 @@ class TestComputePnL:
 
     def test_multiple_tokens(self):
         fills = [
-            Fill("token1", "buy", Decimal("100"), Decimal("0.50"), Decimal("1"), "2024-01-01T00:00:00Z"),
-            Fill("token2", "buy", Decimal("50"), Decimal("0.30"), Decimal("0.5"), "2024-01-01T00:00:00Z"),
+            Fill(
+                "token1",
+                "buy",
+                Decimal("100"),
+                Decimal("0.50"),
+                Decimal("1"),
+                "2024-01-01T00:00:00Z",
+            ),
+            Fill(
+                "token2",
+                "buy",
+                Decimal("50"),
+                Decimal("0.30"),
+                Decimal("0.5"),
+                "2024-01-01T00:00:00Z",
+            ),
         ]
 
         report = compute_pnl(fills)
@@ -607,7 +642,14 @@ class TestComputePnL:
 
     def test_with_liquidation_value(self):
         fills = [
-            Fill("token1", "buy", Decimal("100"), Decimal("0.50"), Decimal("1"), "2024-01-01T00:00:00Z"),
+            Fill(
+                "token1",
+                "buy",
+                Decimal("100"),
+                Decimal("0.50"),
+                Decimal("1"),
+                "2024-01-01T00:00:00Z",
+            ),
         ]
 
         orderbooks = {

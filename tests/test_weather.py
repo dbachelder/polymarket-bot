@@ -218,7 +218,7 @@ class TestComputeModelConsensus:
         result = compute_model_consensus(forecasts, "nyc", target_date=target_date, min_models=2)
         assert result is not None
         assert result.consensus_high == 46.0  # Average of 45 and 47
-        assert result.consensus_low == 33.0   # Average of 32 and 34
+        assert result.consensus_low == 33.0  # Average of 32 and 34
         assert result.model_count == 2
 
     def test_filters_by_date(self) -> None:

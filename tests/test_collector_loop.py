@@ -28,6 +28,7 @@ class TestPruneOldFiles:
         old_mtime = time.time() - (48 * 3600)
         old_file.touch()
         import os
+
         os.utime(old_file, (old_mtime, old_mtime))
 
         # Prune with 24 hour retention
@@ -55,6 +56,7 @@ class TestPruneOldFiles:
         # Set old mtime
         old_mtime = time.time() - (48 * 3600)
         import os
+
         os.utime(file_5m, (old_mtime, old_mtime))
 
         # Prune 15m snapshots
@@ -155,6 +157,7 @@ class TestCheckStalenessSla:
         # Set mtime to 3 minutes ago
         old_mtime = time.time() - 180
         import os
+
         os.utime(f, (old_mtime, old_mtime))
 
         result = check_staleness_sla(tmp_path, max_age_seconds=120.0, prefix="snapshot_15m")

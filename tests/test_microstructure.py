@@ -61,8 +61,8 @@ def test_compute_book_metrics_only_bids():
 
 def test_compute_book_metrics_depth_limiting():
     """Test that depth_levels limits the calculation."""
-    bids = [{"price": f"{0.50 - i*0.01:.2f}", "size": "100"} for i in range(20)]
-    asks = [{"price": f"{0.52 + i*0.01:.2f}", "size": "100"} for i in range(20)]
+    bids = [{"price": f"{0.50 - i * 0.01:.2f}", "size": "100"} for i in range(20)]
+    asks = [{"price": f"{0.52 + i * 0.01:.2f}", "size": "100"} for i in range(20)]
 
     result = _compute_book_metrics(bids, asks, depth_levels=5)
 
@@ -216,15 +216,27 @@ def test_analyze_snapshot_microstructure(tmp_path: Path):
             {
                 "title": "Bitcoin Market",
                 "books": {
-                    "yes": {"bids": [{"price": "0.60", "size": "100"}], "asks": [{"price": "0.62", "size": "100"}]},
-                    "no": {"bids": [{"price": "0.38", "size": "100"}], "asks": [{"price": "0.40", "size": "100"}]},
+                    "yes": {
+                        "bids": [{"price": "0.60", "size": "100"}],
+                        "asks": [{"price": "0.62", "size": "100"}],
+                    },
+                    "no": {
+                        "bids": [{"price": "0.38", "size": "100"}],
+                        "asks": [{"price": "0.40", "size": "100"}],
+                    },
                 },
             },
             {
                 "title": "Ethereum Market",
                 "books": {
-                    "yes": {"bids": [{"price": "0.55", "size": "100"}], "asks": [{"price": "0.57", "size": "100"}]},
-                    "no": {"bids": [{"price": "0.43", "size": "100"}], "asks": [{"price": "0.45", "size": "100"}]},
+                    "yes": {
+                        "bids": [{"price": "0.55", "size": "100"}],
+                        "asks": [{"price": "0.57", "size": "100"}],
+                    },
+                    "no": {
+                        "bids": [{"price": "0.43", "size": "100"}],
+                        "asks": [{"price": "0.45", "size": "100"}],
+                    },
                 },
             },
         ],
@@ -295,8 +307,14 @@ def test_write_microstructure_report(tmp_path: Path):
             {
                 "title": "Bitcoin Market",
                 "books": {
-                    "yes": {"bids": [{"price": "0.60", "size": "100"}], "asks": [{"price": "0.62", "size": "100"}]},
-                    "no": {"bids": [{"price": "0.38", "size": "100"}], "asks": [{"price": "0.40", "size": "100"}]},
+                    "yes": {
+                        "bids": [{"price": "0.60", "size": "100"}],
+                        "asks": [{"price": "0.62", "size": "100"}],
+                    },
+                    "no": {
+                        "bids": [{"price": "0.38", "size": "100"}],
+                        "asks": [{"price": "0.40", "size": "100"}],
+                    },
                 },
             },
         ],
@@ -333,13 +351,25 @@ def test_btc_15m_extreme_pinning_scenario():
             "yes": {
                 # Bids: sorted descending -> 0.03, 0.02, 0.01 (best_bid = 0.03)
                 # But in real pinned scenario, bids only exist at low prices like 0.01
-                "bids": [{"price": "0.01", "size": "29808.1"}, {"price": "0.02", "size": "13077.66"}],
+                "bids": [
+                    {"price": "0.01", "size": "29808.1"},
+                    {"price": "0.02", "size": "13077.66"},
+                ],
                 # Asks: sorted ascending -> 0.98, 0.99 (best_ask = 0.98)
-                "asks": [{"price": "0.99", "size": "29685.93"}, {"price": "0.98", "size": "13739.72"}],
+                "asks": [
+                    {"price": "0.99", "size": "29685.93"},
+                    {"price": "0.98", "size": "13739.72"},
+                ],
             },
             "no": {
-                "bids": [{"price": "0.01", "size": "29685.93"}, {"price": "0.02", "size": "13739.72"}],
-                "asks": [{"price": "0.99", "size": "29808.1"}, {"price": "0.98", "size": "13077.66"}],
+                "bids": [
+                    {"price": "0.01", "size": "29685.93"},
+                    {"price": "0.02", "size": "13739.72"},
+                ],
+                "asks": [
+                    {"price": "0.99", "size": "29808.1"},
+                    {"price": "0.98", "size": "13077.66"},
+                ],
             },
         },
     }
