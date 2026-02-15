@@ -155,6 +155,60 @@ def cmd_pnl_verify(args: argparse.Namespace) -> None:
         print("\n" + "=" * 60)
 
 
+def cmd_binance_collect(args: argparse.Namespace) -> None:
+    """Collect Binance BTC market data (REST API single snapshot)."""
+    from pathlib import Path
+
+    from .binance_collector import collect_snapshot_rest
+
+    out_dir = Path(args.out)
+    out_path = collect_snapshot_rest(
+        out_dir=out_dir,
+        symbol=args.symbol,
+        kline_intervals=args.intervals,
+    )
+    print(str(out_path))
+
+
+def cmd_binance_loop(args: argparse.Namespace) -> None:
+    """Run Binance WebSocket collector loop."""
+    from pathlib import Path
+
+    from .binance_collector import run_collector_loop
+
+    run_collector_loop(
+        out_dir=Path(args.out),
+        symbol=args.symbol,
+        kline_intervals=args.intervals,
+        snapshot_interval_seconds=float(args.snapshot_interval_seconds),
+        max_reconnect_delay=float(args.max_reconnect_delay),
+        retention_hours=args.retention_hours,
+    )
+
+
+def cmd_binance_features(args: argparse.Namespace) -> None:
+    """Build features from Binance data and align to Polymarket snapshots."""
+    from pathlib import Path
+
+    from .binance_features import (
+        align_to_polymarket_snapshots,
+        save_aligned_features,
+    )
+
+    binance_dir = Path(args.binance_dir)
+    polymarket_dir = Path(args.polymarket_dir)
+    out_path = Path(args.out)
+
+    aligned = align_to_polymarket_snapshots(
+        binance_data_dir=binance_dir,
+        polymarket_data_dir=polymarket_dir,
+        tolerance_seconds=float(args.tolerance),
+    )
+
+    save_aligned_features(aligned, out_path)
+    print(f"Aligned {len(aligned)} records to {out_path}")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="polymarket")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -205,6 +259,29 @@ def main() -> None:
     pnl.add_argument("--books", default=None, help="Path to orderbooks JSON for liquidation value")
     pnl.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     pnl.set_defaults(func=cmd_pnl_verify)
+
+    # Binance commands
+    bc = sub.add_parser("binance-collect", help="Collect Binance BTC market data (single snapshot)")
+    bc.add_argument("--out", default="data/binance", help="Output directory")
+    bc.add_argument("--symbol", default="BTCUSDT", help="Trading pair symbol (default: BTCUSDT)")
+    bc.add_argument("--intervals", nargs="+", default=["1m", "5m"], help="Kline intervals to fetch")
+    bc.set_defaults(func=cmd_binance_collect)
+
+    bcl = sub.add_parser("binance-loop", help="Continuously collect Binance data via WebSocket")
+    bcl.add_argument("--out", default="data/binance", help="Output directory")
+    bcl.add_argument("--symbol", default="BTCUSDT", help="Trading pair symbol")
+    bcl.add_argument("--intervals", nargs="+", default=["1m", "5m"], help="Kline intervals to subscribe")
+    bcl.add_argument("--snapshot-interval-seconds", type=float, default=5.0, help="Snapshot interval")
+    bcl.add_argument("--max-reconnect-delay", type=float, default=60.0, help="Max reconnection delay")
+    bcl.add_argument("--retention-hours", type=float, default=None, help="Prune old files")
+    bcl.set_defaults(func=cmd_binance_loop)
+
+    bf = sub.add_parser("binance-align", help="Align Binance features to Polymarket snapshots")
+    bf.add_argument("--binance-dir", default="data/binance", help="Binance data directory")
+    bf.add_argument("--polymarket-dir", default="data", help="Polymarket data directory")
+    bf.add_argument("--out", default="data/aligned_features.json", help="Output file")
+    bf.add_argument("--tolerance", type=float, default=1.0, help="Alignment tolerance in seconds")
+    bf.set_defaults(func=cmd_binance_features)
 
     args = p.parse_args()
     args.func(args)
