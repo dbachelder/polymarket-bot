@@ -531,6 +531,90 @@ def cmd_sports_stats(args: argparse.Namespace) -> None:
         print("=" * 80)
 
 
+def cmd_weather_consensus_scan(args: argparse.Namespace) -> None:
+    """Scan for weather consensus mispricing opportunities."""
+    from pathlib import Path
+
+    from .strategy_weather_consensus import run_consensus_scan
+
+    snapshots_dir = Path(args.snapshots_dir) if args.snapshots_dir else None
+    cities = args.cities.split(",") if args.cities else None
+
+    result = run_consensus_scan(
+        snapshots_dir=snapshots_dir,
+        cities=cities,
+        dry_run=not args.live,
+    )
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        print("=" * 70)
+        print("WEATHER CONSENSUS MISPRICING SCAN")
+        print("=" * 70)
+        print(f"Scan time: {result['timestamp']}")
+        print(f"Markets scanned: {result['markets_scanned']}")
+        print(f"Signals generated: {result['signals_generated']}")
+        print(f"Actionable signals: {result['actionable_signals']}")
+        print(f"Trades executed: {result['trades_executed']}")
+        print(f"Exits triggered: {result['exits_triggered']}")
+        print(f"Positions open: {result['positions_open']}")
+        print(f"Daily exposure: ${result['daily_exposure']:.2f}")
+        print(f"Dry run: {result['dry_run']}")
+
+        # Show consensus
+        if result["consensus"]:
+            print("\n--- Model Consensus ---")
+            for city, cons in result["consensus"].items():
+                print(
+                    f"  {city}: high={cons['consensus_high']:.1f}°F, "
+                    f"models={cons['model_count']}, agreement={cons['agreement_score']:.2f}"
+                )
+
+        # Show signals
+        if result["signals"]:
+            print("\n--- All Signals ---")
+            for sig in result["signals"]:
+                market_q = (
+                    sig["market"]["question"][:45] if sig["market"]["question"] else "Unknown"
+                )
+                extreme = " [!]" if sig["is_extreme_mispricing"] else ""
+                print(
+                    f"  {sig['side']:<12} | edge={sig['edge']:+.2f} | "
+                    f"EV={sig['expected_value']:.3f} | agr={sig['model_agreement']:.2f}{extreme}"
+                )
+                print(f"               | {market_q}...")
+
+        # Show positions
+        if result["positions"]:
+            print("\n--- Open Positions ---")
+            for pos in result["positions"]:
+                sig = pos["entry_signal"]
+                print(
+                    f"  {sig['side']:<12} | ${pos['position_size']:.2f} | "
+                    f"@{pos['entry_price']:.3f} | {sig['market']['city']}"
+                )
+
+        print("\n" + "=" * 70)
+
+
+def cmd_weather_consensus_loop(args: argparse.Namespace) -> None:
+    """Run continuous weather consensus scanning loop."""
+    from pathlib import Path
+
+    from .strategy_weather_consensus import run_consensus_loop
+
+    snapshots_dir = Path(args.snapshots_dir) if args.snapshots_dir else None
+    cities = args.cities.split(",") if args.cities else None
+
+    run_consensus_loop(
+        snapshots_dir=snapshots_dir,
+        cities=cities,
+        interval_seconds=args.interval,
+        dry_run=not args.live,
+    )
+
+
 def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
     """Run orderbook imbalance strategy backtest."""
     from pathlib import Path
@@ -884,6 +968,61 @@ def main() -> None:
     sps.add_argument("--bankroll", type=float, default=10000.0, help="Paper trading bankroll")
     sps.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     sps.set_defaults(func=cmd_sports_stats)
+
+    # Weather consensus scan command
+    wcs = sub.add_parser(
+        "weather-consensus-scan",
+        help="Scan for weather model consensus mispricing opportunities",
+    )
+    wcs.add_argument(
+        "--snapshots-dir",
+        type=str,
+        default=None,
+        help="Directory containing market snapshots",
+    )
+    wcs.add_argument(
+        "--cities",
+        type=str,
+        default=None,
+        help="Comma-separated list of cities (default: nyc,chicago,dallas,miami,london)",
+    )
+    wcs.add_argument(
+        "--live",
+        action="store_true",
+        help="Execute live trades (default: dry-run)",
+    )
+    wcs.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    wcs.set_defaults(func=cmd_weather_consensus_scan)
+
+    # Weather consensus loop command
+    wcl = sub.add_parser(
+        "weather-consensus-loop",
+        help="Run continuous weather consensus scanning loop",
+    )
+    wcl.add_argument(
+        "--snapshots-dir",
+        type=str,
+        default=None,
+        help="Directory containing market snapshots",
+    )
+    wcl.add_argument(
+        "--cities",
+        type=str,
+        default=None,
+        help="Comma-separated list of cities (default: nyc,chicago,dallas,miami,london)",
+    )
+    wcl.add_argument(
+        "--interval",
+        type=int,
+        default=300,
+        help="Seconds between scans (default: 300)",
+    )
+    wcl.add_argument(
+        "--live",
+        action="store_true",
+        help="Execute live trades (default: dry-run)",
+    )
+    wcl.set_defaults(func=cmd_weather_consensus_loop)
 
     # Orderbook imbalance backtest command
     ib = sub.add_parser(
