@@ -19,7 +19,10 @@ class FiveMMarket:
     fees_enabled: bool | None = None
 
 
-_NEXT_DATA_RE = re.compile(r"<script id=\"__NEXT_DATA__\" type=\"application/json\">(.*?)</script>")
+_NEXT_DATA_RE = re.compile(
+    r"<script id=\"__NEXT_DATA__\" type=\"application/json\">(.*?)</script>",
+    re.DOTALL,
+)
 
 
 def fetch_predictions_page(slug: str = "5M") -> str:
