@@ -2,8 +2,17 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 
 from . import clob
+from .microstructure import (
+    DEFAULT_DEPTH_LEVELS,
+    DEFAULT_EXTREME_PIN_THRESHOLD,
+    DEFAULT_SPREAD_ALERT_THRESHOLD,
+    analyze_snapshot_microstructure,
+    generate_microstructure_summary,
+    log_microstructure_alerts,
+)
 
 
 def _print(obj: object) -> None:
@@ -45,8 +54,6 @@ def cmd_price(args: argparse.Namespace) -> None:
 
 
 def cmd_collect_5m(args: argparse.Namespace) -> None:
-    from pathlib import Path
-
     from .collector import collect_5m_snapshot
     from .collector_loop import collect_5m_loop
 
@@ -65,8 +72,6 @@ def cmd_collect_5m(args: argparse.Namespace) -> None:
 
 
 def cmd_collect_15m(args: argparse.Namespace) -> None:
-    from pathlib import Path
-
     from .collector import collect_15m_snapshot
 
     out = collect_15m_snapshot(Path(args.out))
@@ -74,8 +79,6 @@ def cmd_collect_15m(args: argparse.Namespace) -> None:
 
 
 def cmd_universe_5m(args: argparse.Namespace) -> None:
-    from pathlib import Path
-
     from .universe import build_universe, save_universe
 
     data = build_universe(cross_check=args.cross_check)
@@ -84,8 +87,6 @@ def cmd_universe_5m(args: argparse.Namespace) -> None:
 
 
 def cmd_collect_15m_loop(args: argparse.Namespace) -> None:
-    from pathlib import Path
-
     from .collector_loop import collect_15m_loop
 
     collect_15m_loop(
@@ -93,13 +94,16 @@ def cmd_collect_15m_loop(args: argparse.Namespace) -> None:
         interval_seconds=float(args.interval_seconds),
         max_backoff_seconds=float(args.max_backoff_seconds),
         retention_hours=args.retention_hours,
+        microstructure_interval_seconds=float(args.microstructure_interval_seconds),
+        microstructure_target=args.microstructure_target,
+        spread_alert_threshold=float(args.spread_alert_threshold),
+        extreme_pin_threshold=float(args.extreme_pin_threshold),
+        depth_levels=int(args.depth_levels),
     )
 
 
 def cmd_pnl_verify(args: argparse.Namespace) -> None:
     """Verify PnL from fills data."""
-    from pathlib import Path
-
     from .pnl import compute_pnl, load_fills_from_file, load_orderbooks_from_file
 
     input_path = Path(args.input)
@@ -155,6 +159,74 @@ def cmd_pnl_verify(args: argparse.Namespace) -> None:
         print("\n" + "=" * 60)
 
 
+def cmd_microstructure(args: argparse.Namespace) -> None:
+    """Analyze microstructure for markets in a snapshot."""
+    snapshot_path = Path(args.snapshot)
+    if not snapshot_path.exists():
+        print(json.dumps({"error": f"Snapshot file not found: {args.snapshot}"}), file=__import__("sys").stderr)
+        raise SystemExit(1)
+
+    if args.summary:
+        # Generate summary with alerts
+        summary = generate_microstructure_summary(
+            snapshot_path=snapshot_path,
+            target_market_substring=args.target,
+            spread_threshold=float(args.spread_threshold),
+            extreme_pin_threshold=float(args.extreme_pin_threshold),
+            depth_levels=int(args.depth_levels),
+        )
+
+        if args.format == "json":
+            print(json.dumps(summary, indent=2))
+        else:
+            # Human-readable format
+            print("=" * 70)
+            print("MARKET MICROSTRUCTURE SUMMARY")
+            print("=" * 70)
+            print(f"Generated:      {summary['generated_at']}")
+            print(f"Snapshot:       {summary['snapshot_path']}")
+            print(f"Markets:        {summary['markets_analyzed']}")
+            print(f"\nThresholds:")
+            print(f"  Spread alert:     > {summary['spread_threshold']:.2f}")
+            print(f"  Extreme pin:      <= {summary['extreme_pin_threshold']:.2f} or >= {1.0 - summary['extreme_pin_threshold']:.2f}")
+            print(f"  Depth levels:     {summary['depth_levels']}")
+
+            if summary['alerts']:
+                print(f"\n--- ALERTS ({summary['alert_count']}) ---")
+                for alert in summary['alerts']:
+                    print(f"  ⚠ {alert}")
+            else:
+                print("\n--- ALERTS ---")
+                print("  ✓ No alerts. Markets appear healthy.")
+
+            if summary['market_summaries']:
+                print(f"\n--- MARKET DETAILS ({len(summary['market_summaries'])}) ---")
+                for ms in summary['market_summaries']:
+                    print(f"\n  {ms['market_title']}")
+                    print(f"    YES: bid={ms.get('yes_best_bid'):.2f} ask={ms.get('yes_best_ask'):.2f} "
+                          f"spread={ms.get('yes_spread'):.2f} imbalance={ms.get('yes_imbalance', 0):+.3f}")
+                    print(f"    NO:  bid={ms.get('no_best_bid'):.2f} ask={ms.get('no_best_ask'):.2f} "
+                          f"spread={ms.get('no_spread'):.2f} imbalance={ms.get('no_imbalance', 0):+.3f}")
+                    if ms.get('implied_sum'):
+                        print(f"    Implied: YES_mid={ms.get('implied_yes_mid', 0):.2f} "
+                              f"NO_mid={ms.get('implied_no_mid', 0):.2f} "
+                              f"sum={ms.get('implied_sum', 0):.2f} "
+                              f"consistency={ms.get('consistency_diff', 0):.3f}")
+
+            print("\n" + "=" * 70)
+
+        # Log alerts to stderr as well
+        log_microstructure_alerts(summary)
+    else:
+        # Raw analysis output
+        analyses = analyze_snapshot_microstructure(
+            snapshot_path=snapshot_path,
+            target_market_substring=args.target,
+            depth_levels=int(args.depth_levels),
+        )
+        print(json.dumps(analyses, indent=2))
+
+
 def cmd_binance_collect(args: argparse.Namespace) -> None:
     """Collect Binance BTC market data (REST API single snapshot)."""
     from pathlib import Path
@@ -207,6 +279,74 @@ def cmd_binance_features(args: argparse.Namespace) -> None:
 
     save_aligned_features(aligned, out_path)
     print(f"Aligned {len(aligned)} records to {out_path}")
+=======
+def cmd_microstructure(args: argparse.Namespace) -> None:
+    """Analyze microstructure for markets in a snapshot."""
+    snapshot_path = Path(args.snapshot)
+    if not snapshot_path.exists():
+        print(json.dumps({"error": f"Snapshot file not found: {args.snapshot}"}), file=__import__("sys").stderr)
+        raise SystemExit(1)
+
+    if args.summary:
+        # Generate summary with alerts
+        summary = generate_microstructure_summary(
+            snapshot_path=snapshot_path,
+            target_market_substring=args.target,
+            spread_threshold=float(args.spread_threshold),
+            extreme_pin_threshold=float(args.extreme_pin_threshold),
+            depth_levels=int(args.depth_levels),
+        )
+
+        if args.format == "json":
+            print(json.dumps(summary, indent=2))
+        else:
+            # Human-readable format
+            print("=" * 70)
+            print("MARKET MICROSTRUCTURE SUMMARY")
+            print("=" * 70)
+            print(f"Generated:      {summary['generated_at']}")
+            print(f"Snapshot:       {summary['snapshot_path']}")
+            print(f"Markets:        {summary['markets_analyzed']}")
+            print(f"\nThresholds:")
+            print(f"  Spread alert:     > {summary['spread_threshold']:.2f}")
+            print(f"  Extreme pin:      <= {summary['extreme_pin_threshold']:.2f} or >= {1.0 - summary['extreme_pin_threshold']:.2f}")
+            print(f"  Depth levels:     {summary['depth_levels']}")
+
+            if summary['alerts']:
+                print(f"\n--- ALERTS ({summary['alert_count']}) ---")
+                for alert in summary['alerts']:
+                    print(f"  ⚠ {alert}")
+            else:
+                print("\n--- ALERTS ---")
+                print("  ✓ No alerts. Markets appear healthy.")
+
+            if summary['market_summaries']:
+                print(f"\n--- MARKET DETAILS ({len(summary['market_summaries'])}) ---")
+                for ms in summary['market_summaries']:
+                    print(f"\n  {ms['market_title']}")
+                    print(f"    YES: bid={ms.get('yes_best_bid'):.2f} ask={ms.get('yes_best_ask'):.2f} "
+                          f"spread={ms.get('yes_spread'):.2f} imbalance={ms.get('yes_imbalance', 0):+.3f}")
+                    print(f"    NO:  bid={ms.get('no_best_bid'):.2f} ask={ms.get('no_best_ask'):.2f} "
+                          f"spread={ms.get('no_spread'):.2f} imbalance={ms.get('no_imbalance', 0):+.3f}")
+                    if ms.get('implied_sum'):
+                        print(f"    Implied: YES_mid={ms.get('implied_yes_mid', 0):.2f} "
+                              f"NO_mid={ms.get('implied_no_mid', 0):.2f} "
+                              f"sum={ms.get('implied_sum', 0):.2f} "
+                              f"consistency={ms.get('consistency_diff', 0):.3f}")
+
+            print("\n" + "=" * 70)
+
+        # Log alerts to stderr as well
+        log_microstructure_alerts(summary)
+    else:
+        # Raw analysis output
+        analyses = analyze_snapshot_microstructure(
+            snapshot_path=snapshot_path,
+            target_market_substring=args.target,
+            depth_levels=int(args.depth_levels),
+        )
+        print(json.dumps(analyses, indent=2))
+>>>>>>> e6f5e61 (feat: add BTC 15m microstructure stats + sanity checks)
 
 
 def main() -> None:
@@ -252,6 +392,11 @@ def main() -> None:
     pc15l.add_argument("--interval-seconds", type=float, default=5.0, help="Collection interval in seconds")
     pc15l.add_argument("--max-backoff-seconds", type=float, default=60.0, help="Max backoff on errors")
     pc15l.add_argument("--retention-hours", type=float, default=None, help="Prune snapshots older than N hours")
+    pc15l.add_argument("--microstructure-interval-seconds", type=float, default=60.0, help="Seconds between microstructure analyses")
+    pc15l.add_argument("--microstructure-target", type=str, default="bitcoin", help="Target market substring filter (e.g., 'bitcoin')")
+    pc15l.add_argument("--spread-alert-threshold", type=float, default=DEFAULT_SPREAD_ALERT_THRESHOLD, help=f"Alert threshold for spread (default: {DEFAULT_SPREAD_ALERT_THRESHOLD})")
+    pc15l.add_argument("--extreme-pin-threshold", type=float, default=DEFAULT_EXTREME_PIN_THRESHOLD, help=f"Alert threshold for extreme price pinning (default: {DEFAULT_EXTREME_PIN_THRESHOLD})")
+    pc15l.add_argument("--depth-levels", type=int, default=DEFAULT_DEPTH_LEVELS, help=f"Number of book levels for depth calc (default: {DEFAULT_DEPTH_LEVELS})")
     pc15l.set_defaults(func=cmd_collect_15m_loop)
 
     pnl = sub.add_parser("pnl-verify", help="Verify PnL from fills data (debunk screenshots)")
@@ -259,6 +404,17 @@ def main() -> None:
     pnl.add_argument("--books", default=None, help="Path to orderbooks JSON for liquidation value")
     pnl.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     pnl.set_defaults(func=cmd_pnl_verify)
+
+    ms = sub.add_parser("microstructure", help="Analyze market microstructure from snapshot")
+    ms.add_argument("--snapshot", required=True, help="Path to snapshot JSON file")
+    ms.add_argument("--target", type=str, default="bitcoin", help="Target market substring filter")
+    ms.add_argument("--summary", action="store_true", default=True, help="Generate summary with alerts (default)")
+    ms.add_argument("--raw", action="store_true", help="Output raw analysis without summary")
+    ms.add_argument("--spread-threshold", type=float, default=DEFAULT_SPREAD_ALERT_THRESHOLD, help=f"Alert threshold for spread (default: {DEFAULT_SPREAD_ALERT_THRESHOLD})")
+    ms.add_argument("--extreme-pin-threshold", type=float, default=DEFAULT_EXTREME_PIN_THRESHOLD, help=f"Alert threshold for extreme price pinning (default: {DEFAULT_EXTREME_PIN_THRESHOLD})")
+    ms.add_argument("--depth-levels", type=int, default=DEFAULT_DEPTH_LEVELS, help=f"Number of book levels for depth calc (default: {DEFAULT_DEPTH_LEVELS})")
+    ms.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    ms.set_defaults(func=cmd_microstructure)
 
     # Binance commands
     bc = sub.add_parser("binance-collect", help="Collect Binance BTC market data (single snapshot)")
@@ -284,6 +440,11 @@ def main() -> None:
     bf.set_defaults(func=cmd_binance_features)
 
     args = p.parse_args()
+
+    # Handle --raw flag for microstructure command
+    if hasattr(args, "raw") and args.raw:
+        args.summary = False
+
     args.func(args)
 
 
