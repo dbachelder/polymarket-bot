@@ -155,6 +155,63 @@ def cmd_pnl_verify(args: argparse.Namespace) -> None:
         print("\n" + "=" * 60)
 
 
+def cmd_hourly_digest(args: argparse.Namespace) -> None:
+    """Generate hourly digest report from snapshot data."""
+    from pathlib import Path
+
+    from .report import generate_hourly_digest
+
+    data_dir = Path(args.data_dir)
+    digest = generate_hourly_digest(data_dir, interval_seconds=args.interval_seconds)
+    output = digest.to_dict()
+
+    if args.format == "json":
+        print(json.dumps(output, indent=2))
+    else:
+        # Human-readable format
+        health = output["collector_health"]
+        btc = output["btc_microstructure"]
+        strategy = output["paper_strategy"]
+
+        print("=" * 60)
+        print("POLYMARKET HOURLY DIGEST")
+        print("=" * 60)
+        print(f"Generated: {output['generated_at']}")
+
+        print("\n--- Collector Health ---")
+        if health["latest_snapshot_at"]:
+            print(f"Latest snapshot: {health['latest_snapshot_at']}")
+            if health["freshness_seconds"] is not None:
+                print(f"Freshness: {health['freshness_seconds']:.1f}s ago")
+        else:
+            print("Latest snapshot: None found")
+        print(f"Snapshots (last hour): {health['snapshots_last_hour']}/{health['expected_snapshots']}")
+        print(f"Capture rate: {health['capture_rate_pct']:.1f}%")
+        if health["backoff_evidence"]:
+            print("⚠️  Backoff detected (gaps in snapshot sequence)")
+
+        print("\n--- BTC 15m Microstructure ---")
+        print(f"Best bid: {btc['best_bid']}")
+        print(f"Best ask: {btc['best_ask']}")
+        if btc["spread"] is not None:
+            print(f"Spread: {btc['spread']:.4f} ({btc['spread_bps']:.2f} bps)")
+        print(f"Bid depth (top 5): {btc['best_bid_depth']:,.2f}")
+        print(f"Ask depth (top 5): {btc['best_ask_depth']:,.2f}")
+        if btc["depth_imbalance"] is not None:
+            imbalance_pct = btc["depth_imbalance"] * 100
+            side = "bid" if imbalance_pct > 0 else "ask"
+            print(f"Depth imbalance: {imbalance_pct:+.1f}% ({side} heavy)")
+
+        print("\n--- Paper Strategy (Momentum) ---")
+        print(f"Signal: {strategy['signal'].upper()}")
+        print(f"Confidence: {strategy['confidence']*100:.0f}%")
+        if strategy["mid_price_change_1h"] is not None:
+            print(f"1h price change: {strategy['mid_price_change_1h']:+.2f}%")
+        print(f"Reasoning: {strategy['reasoning']}")
+
+        print("\n" + "=" * 60)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="polymarket")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -205,6 +262,12 @@ def main() -> None:
     pnl.add_argument("--books", default=None, help="Path to orderbooks JSON for liquidation value")
     pnl.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     pnl.set_defaults(func=cmd_pnl_verify)
+
+    hd = sub.add_parser("hourly-digest", help="Generate hourly report from 15m snapshots")
+    hd.add_argument("--data-dir", default="data", help="Directory containing snapshot files")
+    hd.add_argument("--interval-seconds", type=float, default=5.0, help="Expected collection interval")
+    hd.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    hd.set_defaults(func=cmd_hourly_digest)
 
     args = p.parse_args()
     args.func(args)
