@@ -1180,8 +1180,7 @@ def cmd_collect_fills(args: argparse.Namespace) -> None:
     """Collect fills from paper trading and/or real account."""
     from pathlib import Path
 
-    from decimal import Decimal
-    from .fills_collector import collect_fills, get_fills_summary
+    from .fills_collector import collect_fills
 
     fills_path = Path(args.out) / "fills.jsonl" if args.out else Path(args.fills_path)
     paper_fills_path = Path(args.paper_fills_path) if args.paper_fills_path else None
