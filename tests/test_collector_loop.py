@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import time
-from datetime import UTC, datetime
 from pathlib import Path
 
-import pytest
 
 from polymarket.collector_loop import (
     _prune_by_count,
