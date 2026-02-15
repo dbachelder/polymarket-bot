@@ -425,6 +425,112 @@ def cmd_health_check(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def cmd_sports_scan(args: argparse.Namespace) -> None:
+    """Scan for sports arbitrage opportunities."""
+    from decimal import Decimal
+
+    from .sports_arbitrage import SportsArbitrageStrategy
+
+    strategy = SportsArbitrageStrategy(
+        bankroll=Decimal(str(args.bankroll)),
+    )
+
+    opportunities = strategy.scan()
+
+    if args.format == "json":
+        print(json.dumps([opp.to_dict() for opp in opportunities], indent=2))
+    else:
+        print("=" * 80)
+        print("SPORTS ARBITRAGE SCAN")
+        print("=" * 80)
+        print(f"Opportunities found: {len(opportunities)}")
+        print(f"Min edge: {args.min_edge}%")
+        print()
+
+        for i, opp in enumerate(opportunities[: args.limit], 1):
+            print(f"--- Opportunity {i} ---")
+            print(f"Market: {opp.pm_market.get('question', 'N/A')}")
+            print(f"Side: {opp.side.upper()}")
+            print(f"Polymarket implied: {float(opp.pm_implied):.2%}")
+            print(f"Sharp book implied: {float(opp.sharp_implied):.2%}")
+            print(f"Edge: {float(opp.edge):.2%}")
+            print(f"Edge after fees: {float(opp.edge_after_fees):.2%}")
+            print(f"Confidence: {float(opp.confidence):.2%}")
+            print()
+
+        print("=" * 80)
+
+
+def cmd_sports_trade(args: argparse.Namespace) -> None:
+    """Execute paper trades for arbitrage opportunities."""
+    from decimal import Decimal
+
+    from .sports_arbitrage import SportsArbitrageStrategy
+
+    strategy = SportsArbitrageStrategy(
+        bankroll=Decimal(str(args.bankroll)),
+    )
+
+    if args.scan:
+        # Scan and trade all opportunities
+        opportunities = strategy.scan()
+        trades = []
+        for opp in opportunities:
+            if opp.is_valid:
+                trade = strategy.paper_trade(opp)
+                trades.append(trade)
+
+        if args.format == "json":
+            print(json.dumps([t.to_dict() for t in trades], indent=2))
+        else:
+            print("=" * 80)
+            print("SPORTS ARBITRAGE PAPER TRADES")
+            print("=" * 80)
+            print(f"Opportunities found: {len(opportunities)}")
+            print(f"Trades executed: {len(trades)}")
+            print()
+
+            for t in trades:
+                print(f"Trade: {t.trade_id}")
+                print(f"  Market: {t.pm_market_id}")
+                print(f"  Side: {t.side.upper()}")
+                print(f"  Size: ${float(t.size):.2f}")
+                print(f"  Entry: {float(t.entry_price):.4f}")
+                print(f"  Edge: {float(t.edge_at_entry):.2%}")
+                print()
+
+            print("=" * 80)
+
+
+def cmd_sports_stats(args: argparse.Namespace) -> None:
+    """Show sports arbitrage strategy statistics."""
+    from decimal import Decimal
+
+    from .sports_arbitrage import SportsArbitrageStrategy
+
+    strategy = SportsArbitrageStrategy(
+        bankroll=Decimal(str(args.bankroll)),
+    )
+
+    stats = strategy.get_stats()
+
+    if args.format == "json":
+        # Convert Decimals to strings for JSON serialization
+        json_stats = {k: str(v) if isinstance(v, Decimal) else v for k, v in stats.items()}
+        print(json.dumps(json_stats, indent=2))
+    else:
+        print("=" * 80)
+        print("SPORTS ARBITRAGE STATISTICS")
+        print("=" * 80)
+        print(f"Total opportunities detected: {stats['total_opportunities']}")
+        print(f"Total trades: {stats['total_trades']}")
+        print(f"Open trades: {stats['open_trades']}")
+        print(f"Closed trades: {stats['closed_trades']}")
+        print(f"Total PnL: ${float(stats['total_pnl']):,.2f}")
+        print(f"Average edge: {float(stats['avg_edge']):.2%}")
+        print("=" * 80)
+
+
 def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
     """Run orderbook imbalance strategy backtest."""
     from pathlib import Path
@@ -759,6 +865,25 @@ def main() -> None:
     hc.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     hc.add_argument("--fail", action="store_true", help="Exit with error code if unhealthy")
     hc.set_defaults(func=cmd_health_check)
+
+    # Sports arbitrage commands
+    sp = sub.add_parser("sports-scan", help="Scan for sports arbitrage opportunities")
+    sp.add_argument("--bankroll", type=float, default=10000.0, help="Paper trading bankroll")
+    sp.add_argument("--min-edge", type=float, default=2.0, help="Minimum edge percentage")
+    sp.add_argument("--limit", type=int, default=10, help="Max opportunities to display")
+    sp.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    sp.set_defaults(func=cmd_sports_scan)
+
+    spt = sub.add_parser("sports-trade", help="Execute paper trades for arbitrage opportunities")
+    spt.add_argument("--bankroll", type=float, default=10000.0, help="Paper trading bankroll")
+    spt.add_argument("--scan", action="store_true", default=True, help="Scan before trading")
+    spt.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    spt.set_defaults(func=cmd_sports_trade)
+
+    sps = sub.add_parser("sports-stats", help="Show sports arbitrage strategy statistics")
+    sps.add_argument("--bankroll", type=float, default=10000.0, help="Paper trading bankroll")
+    sps.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    sps.set_defaults(func=cmd_sports_stats)
 
     # Orderbook imbalance backtest command
     ib = sub.add_parser(

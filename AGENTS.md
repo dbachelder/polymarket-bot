@@ -23,7 +23,9 @@ src/polymarket/          # Main source code
 ├── collector.py         # Data collection logic
 ├── collector_loop.py    # Continuous collection loops
 ├── pnl.py              # PnL verification
-└── ...
+├── odds_api.py         # Sharp book odds (Pinnacle/Betfair via OddsAPI)
+├── sports_markets.py   # Polymarket sports market identification
+└── sports_arbitrage.py # Cross-platform sports arbitrage strategy
 tests/                   # Test suite
 data/                    # Collected data (gitignored)
 docs/                    # Documentation
@@ -40,6 +42,33 @@ docs/                    # Documentation
 ./run.sh health-check      # Check collector health
 ./run.sh tests             # Run pytest suite
 ```
+
+## Sports Arbitrage Strategy
+
+Cross-platform arbitrage between Polymarket sports markets and sharp sportsbooks.
+
+```bash
+# Scan for arbitrage opportunities
+python -m polymarket.cli sports-scan
+
+# Execute paper trades
+python -m polymarket.cli sports-trade
+
+# View strategy statistics
+python -m polymarket.cli sports-stats
+```
+
+### Strategy Details
+
+- **Data Sources**: Polymarket Gamma API + The Odds API (Pinnacle/Betfair)
+- **Minimum Edge**: 2% after Polymarket withdrawal fees
+- **Sports**: NFL, NBA, MLB, Premier League, NHL
+- **Sizing**: Kelly/4, max 5% bankroll per trade
+- **Paper Trading**: Logs to `data/sports_arb/opportunities.jsonl` and `trades.jsonl`
+
+### Configuration
+
+Set `ODDS_API_KEY` environment variable for sharp book data (free tier at https://the-odds-api.com).
 
 ## Development
 
