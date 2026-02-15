@@ -43,19 +43,24 @@ def extract_5m_markets(next_data: dict) -> list[FiveMMarket]:
     # Path discovered empirically from the /predictions/5M page.
     dehydrated = next_data["props"]["pageProps"]["dehydratedState"]["queries"]
 
-    # Find the query that contains tagLabel=5M (this is stable-ish)
-    tag_query = None
+    # Find the query that contains pages with tagLabel=5M (stable-ish)
+    pages: list[dict] = []
     for q in dehydrated:
         state = q.get("state", {})
         data = state.get("data")
-        if isinstance(data, dict) and data.get("tagLabel") == "5M":
-            tag_query = data
+        if not isinstance(data, dict):
+            continue
+        candidate_pages = data.get("pages")
+        if not isinstance(candidate_pages, list) or not candidate_pages:
+            continue
+        # tagLabel lives at the *page* level
+        if candidate_pages[0].get("tagLabel") == "5M":
+            pages = candidate_pages
             break
 
-    if not tag_query:
-        raise ValueError("Could not locate 5M query payload in dehydratedState")
+    if not pages:
+        raise ValueError("Could not locate 5M pages payload in dehydratedState")
 
-    pages = tag_query.get("pages") or []
     results: list[dict] = []
     for p in pages:
         results.extend(p.get("results") or [])
