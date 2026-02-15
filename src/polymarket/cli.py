@@ -1175,6 +1175,7 @@ def cmd_paper_backtest(args: argparse.Namespace) -> None:
 
         print("=" * 70)
 
+
 def cmd_dataset_join(args: argparse.Namespace) -> None:
     """Align Polymarket 15m snapshots with Binance BTC features for lead/lag analysis."""
     from pathlib import Path
@@ -1326,24 +1327,24 @@ def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
             print(f"Trades with outcome:  {result.metrics.get('trades_with_outcome', 0)}")
 
             print("\n--- Accuracy Metrics ---")
-            hit_rate = result.metrics.get('hit_rate', 0)
-            up_hit = result.metrics.get('up_hit_rate', 0)
-            down_hit = result.metrics.get('down_hit_rate', 0)
+            hit_rate = result.metrics.get("hit_rate", 0)
+            up_hit = result.metrics.get("up_hit_rate", 0)
+            down_hit = result.metrics.get("down_hit_rate", 0)
             print(f"Hit rate (direction): {hit_rate:.1%}")
             print(f"  UP predictions:     {up_hit:.1%}")
             print(f"  DOWN predictions:   {down_hit:.1%}")
 
             print("\n--- Calibration Metrics ---")
-            brier = result.metrics.get('avg_brier_score', 0)
-            logloss = result.metrics.get('avg_log_loss', 0)
+            brier = result.metrics.get("avg_brier_score", 0)
+            logloss = result.metrics.get("avg_log_loss", 0)
             print(f"Avg Brier score:      {brier:.4f} (lower=better, 0=perfect)")
             print(f"Avg log loss:         {logloss:.4f} (lower=better)")
 
             print("\n--- PnL Metrics ---")
-            total_pnl = result.metrics.get('total_pnl', 0)
-            win_rate = result.metrics.get('win_rate', 0)
-            ev = result.metrics.get('ev_per_trade', 0)
-            sharpe = result.metrics.get('sharpe_ratio', 0)
+            total_pnl = result.metrics.get("total_pnl", 0)
+            win_rate = result.metrics.get("win_rate", 0)
+            ev = result.metrics.get("ev_per_trade", 0)
+            sharpe = result.metrics.get("sharpe_ratio", 0)
             print(f"Total PnL:            {total_pnl:+.4f}")
             print(f"Win rate (PnL>0):     {win_rate:.1%}")
             print(f"EV per trade:         {ev:+.4f}")
@@ -1354,7 +1355,9 @@ def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
                 for t in result.trades[-10:]:
                     outcome_str = ""
                     if t.outcome_up is not None:
-                        correct = (t.decision == "UP" and t.outcome_up) or (t.decision == "DOWN" and not t.outcome_up)
+                        correct = (t.decision == "UP" and t.outcome_up) or (
+                            t.decision == "DOWN" and not t.outcome_up
+                        )
                         outcome_str = f" | outcome={'UP' if t.outcome_up else 'DOWN'} {'✓' if correct else '✗'}"
                     pnl_str = f" | pnl={t.pnl:+.4f}" if t.pnl is not None else ""
                     print(
@@ -1568,10 +1571,7 @@ def main() -> None:
     ms.add_argument(
         "--snapshot",
         required=True,
-        help=(
-            "Path to snapshot JSON file. "
-            "Supports pointer files like data/latest_15m.json"
-        ),
+        help=("Path to snapshot JSON file. Supports pointer files like data/latest_15m.json"),
     )
     ms.add_argument("--target", type=str, default="bitcoin", help="Target market substring filter")
     ms.add_argument(

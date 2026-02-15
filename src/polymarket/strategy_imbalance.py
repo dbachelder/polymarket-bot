@@ -318,8 +318,12 @@ def _get_mid_price_from_snapshot(
                 asks = yes_book.get("asks", [])
 
                 if bids and asks:
-                    best_bid = _to_float(sorted(bids, key=lambda x: _to_float(x["price"]), reverse=True)[0]["price"])
-                    best_ask = _to_float(sorted(asks, key=lambda x: _to_float(x["price"]))[0]["price"])
+                    best_bid = _to_float(
+                        sorted(bids, key=lambda x: _to_float(x["price"]), reverse=True)[0]["price"]
+                    )
+                    best_ask = _to_float(
+                        sorted(asks, key=lambda x: _to_float(x["price"]))[0]["price"]
+                    )
                     return (best_bid + best_ask) / 2
                 return None
 
@@ -333,8 +337,12 @@ def _get_mid_price_from_snapshot(
                 asks = yes_book.get("asks", [])
 
                 if bids and asks:
-                    best_bid = _to_float(sorted(bids, key=lambda x: _to_float(x["price"]), reverse=True)[0]["price"])
-                    best_ask = _to_float(sorted(asks, key=lambda x: _to_float(x["price"]))[0]["price"])
+                    best_bid = _to_float(
+                        sorted(bids, key=lambda x: _to_float(x["price"]), reverse=True)[0]["price"]
+                    )
+                    best_ask = _to_float(
+                        sorted(asks, key=lambda x: _to_float(x["price"]))[0]["price"]
+                    )
                     return (best_bid + best_ask) / 2
                 return None
 
@@ -522,7 +530,9 @@ def run_backtest(
     trades: list[TradeDecision] = []
 
     # Pre-sort snapshots by timestamp
-    sorted_snapshots = sorted(snapshots, key=lambda p: _parse_snapshot_timestamp(p) or datetime.min.replace(tzinfo=UTC))
+    sorted_snapshots = sorted(
+        snapshots, key=lambda p: _parse_snapshot_timestamp(p) or datetime.min.replace(tzinfo=UTC)
+    )
 
     for snap_path in sorted_snapshots:
         features_list = extract_features_from_snapshot(snap_path, target_market_substring)
@@ -567,7 +577,11 @@ def run_backtest(
                     )
                     if exit_price is not None:
                         outcome_up = exit_price > feat.mid_yes
-                        horizon_return = exit_price - feat.mid_yes if decision == "UP" else feat.mid_yes - exit_price
+                        horizon_return = (
+                            exit_price - feat.mid_yes
+                            if decision == "UP"
+                            else feat.mid_yes - exit_price
+                        )
                         pnl = _compute_pnl(decision, entry_price, exit_price, fee_bps, slippage_bps)
 
                 trades.append(
@@ -608,7 +622,8 @@ def _compute_metrics(
     # Hit rate (accuracy) - only for trades with known outcomes
     trades_with_outcome = [t for t in trades if t.outcome_up is not None]
     correct_trades = [
-        t for t in trades_with_outcome
+        t
+        for t in trades_with_outcome
         if (t.decision == "UP" and t.outcome_up) or (t.decision == "DOWN" and not t.outcome_up)
     ]
     hit_rate = len(correct_trades) / len(trades_with_outcome) if trades_with_outcome else 0.0
@@ -656,27 +671,22 @@ def _compute_metrics(
         "down_trades": len(down_trades),
         "trades_with_outcome": len(trades_with_outcome),
         "trades_with_pnl": len(trades_with_pnl),
-
         # Accuracy metrics
         "hit_rate": hit_rate,
         "up_hit_rate": up_hit_rate,
         "down_hit_rate": down_hit_rate,
-
         # Calibration metrics
         "avg_brier_score": avg_brier,
         "avg_log_loss": avg_log_loss,
-
         # PnL metrics
         "total_pnl": total_pnl,
         "avg_pnl": avg_pnl,
         "win_rate": win_rate,
         "ev_per_trade": ev_per_trade,
         "sharpe_ratio": sharpe,
-
         # Legacy metrics
         "avg_confidence": np.mean([t.confidence for t in trades]) if trades else 0,
         "avg_entry_price": np.mean([t.entry_price for t in trades]) if trades else 0,
-
         # Parameters
         "params": {
             "k": k,
