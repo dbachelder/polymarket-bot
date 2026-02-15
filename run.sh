@@ -78,6 +78,14 @@ case "${1:-}" in
         shift
         $PYTHON -m polymarket.cli binance-align "$@"
         ;;
+    cross-market-scan)
+        shift
+        $PYTHON -m polymarket.cli cross-market-scan "$@"
+        ;;
+    cross-market-report)
+        shift
+        $PYTHON -m polymarket.cli cross-market-report "$@"
+        ;;
     shell)
         # Drop into a shell with the venv activated
         exec bash --rcfile <(echo 'source "$SCRIPT_DIR/.venv/bin/activate"; cd "$SCRIPT_DIR"')
@@ -105,6 +113,8 @@ case "${1:-}" in
         echo "  binance-collect    Collect Binance BTC data (single snapshot)"
         echo "  binance-loop       Run Binance WebSocket collector loop"
         echo "  binance-align      Align Binance features to Polymarket"
+        echo "  cross-market-scan  Scan for cross-market arbitrage opportunities"
+        echo "  cross-market-report Generate cross-market arbitrage performance report"
         echo ""
         echo "Utility commands:"
         echo "  shell              Open shell with venv activated"

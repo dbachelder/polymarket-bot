@@ -585,6 +585,100 @@ def cmd_weather_scan(args: argparse.Namespace) -> None:
         print("\n" + "=" * 70)
 
 
+def cmd_cross_market_scan(args: argparse.Namespace) -> None:
+    """Run cross-market arbitrage scan across Polymarket and Kalshi."""
+    from pathlib import Path
+
+    from .cross_market.strategy import CrossMarketArbitrage
+
+    data_dir = Path(args.out) if args.out else None
+
+    with CrossMarketArbitrage(
+        min_gross_spread=float(args.min_gross_spread),
+        min_net_spread=float(args.min_net_spread),
+        max_positions=int(args.max_positions),
+        position_size=float(args.position_size),
+        data_dir=data_dir,
+    ) as strategy:
+        result = strategy.scan(
+            categories=args.categories.split(",") if args.categories else None,
+            dry_run=not args.live,
+        )
+
+        if args.format == "json":
+            print(json.dumps(result.to_dict(), indent=2))
+        else:
+            print("=" * 70)
+            print("CROSS-MARKET ARBITRAGE SCAN")
+            print("=" * 70)
+            print(f"Scan time:       {result.timestamp.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+            print(f"Polymarket:      {result.polymarket_markets} markets")
+            print(f"Kalshi:          {result.kalshi_markets} markets")
+            print(f"Matched events:  {result.matched_events}")
+            print(f"Opportunities:   {result.opportunities}")
+            print(f"Trades entered:  {result.trades_entered}")
+            print(f"Mode:            {'LIVE' if not result.dry_run else 'DRY RUN'}")
+
+            if result.opportunities_list:
+                print("\n--- Top Opportunities ---")
+                for opp in result.opportunities_list[:10]:
+                    print(
+                        f"  {opp.venue_yes} YES @ {opp.yes_price:.3f} + "
+                        f"{opp.venue_no} NO @ {opp.no_price:.3f} | "
+                        f"Gross: {opp.gross_spread*100:.2f}% | "
+                        f"Net: {opp.net_spread*100:.2f}% | "
+                        f"Conf: {opp.confidence:.2f}"
+                    )
+
+            # Show performance summary
+            summary = strategy.get_performance_report()
+            if summary["total_trades"] > 0:
+                print(f"\n--- Performance Summary ---")
+                print(f"Total trades:    {summary['total_trades']}")
+                print(f"Open positions:  {summary['open_positions']}")
+                print(f"Realized PnL:    ${summary['total_realized_pnl']:.2f}")
+                print(f"Theoretical PnL: ${summary['total_theoretical_pnl']:.2f}")
+
+            print("=" * 70)
+
+
+def cmd_cross_market_report(args: argparse.Namespace) -> None:
+    """Generate cross-market arbitrage performance report."""
+    from pathlib import Path
+
+    from .cross_market.tracker import PaperTradeTracker
+
+    data_dir = Path(args.data_dir) if args.data_dir else None
+    tracker = PaperTradeTracker(data_dir=data_dir)
+
+    summary = tracker.get_performance_summary()
+
+    if args.format == "json":
+        print(json.dumps(summary, indent=2))
+    else:
+        print("=" * 70)
+        print("CROSS-MARKET ARBITRAGE PERFORMANCE REPORT")
+        print("=" * 70)
+        print(f"Total trades:         {summary['total_trades']}")
+        print(f"Open positions:       {summary['open_positions']}")
+        print(f"Closed positions:     {summary['closed_positions']}")
+        print(f"Win rate:             {summary['win_rate']*100:.1f}%")
+        print(f"\nTotal realized PnL:   ${summary['total_realized_pnl']:.2f}")
+        print(f"Total theoretical:    ${summary['total_theoretical_pnl']:.2f}")
+        print(f"Combined PnL:         ${summary['total_pnl']:.2f}")
+        print(f"\nAvg realized PnL:     ${summary['avg_realized_pnl']:.3f}")
+        print(f"Avg spread captured:  {summary['avg_spread_captured']*100:.2f}%")
+
+        status = summary.get('trades_by_status', {})
+        if status:
+            print(f"\n--- By Status ---")
+            print(f"Open:                 {status.get('open', 0)}")
+            print(f"Closed early:         {status.get('closed', 0)}")
+            print(f"Held to resolution:   {status.get('held_to_resolution', 0)}")
+
+        print("=" * 70)
+
+
 def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
     """Run orderbook imbalance strategy backtest."""
     from pathlib import Path
@@ -1054,6 +1148,62 @@ def main() -> None:
     )
     ib.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     ib.set_defaults(func=cmd_imbalance_backtest)
+
+    # Cross-market arbitrage commands
+    cm = sub.add_parser(
+        "cross-market-scan",
+        help="Scan for cross-market arbitrage opportunities (Polymarket vs Kalshi)",
+    )
+    cm.add_argument("--out", default="data/cross_market", help="Output directory for trade data")
+    cm.add_argument(
+        "--categories",
+        type=str,
+        default=None,
+        help="Comma-separated categories (politics,crypto,sports,finance)",
+    )
+    cm.add_argument(
+        "--min-gross-spread",
+        type=float,
+        default=0.01,
+        help="Minimum gross spread before fees (default: 0.01 = 1%)",
+    )
+    cm.add_argument(
+        "--min-net-spread",
+        type=float,
+        default=0.005,
+        help="Minimum net spread after fees (default: 0.005 = 0.5%)",
+    )
+    cm.add_argument(
+        "--max-positions",
+        type=int,
+        default=10,
+        help="Maximum concurrent positions (default: 10)",
+    )
+    cm.add_argument(
+        "--position-size",
+        type=float,
+        default=1.0,
+        help="Position size in contracts per side (default: 1.0)",
+    )
+    cm.add_argument(
+        "--live",
+        action="store_true",
+        help="Enable live trading (default: dry-run)",
+    )
+    cm.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    cm.set_defaults(func=cmd_cross_market_scan)
+
+    cmr = sub.add_parser(
+        "cross-market-report",
+        help="Generate performance report for cross-market arbitrage",
+    )
+    cmr.add_argument(
+        "--data-dir",
+        default="data/cross_market",
+        help="Data directory containing trade data",
+    )
+    cmr.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    cmr.set_defaults(func=cmd_cross_market_report)
 
     args = p.parse_args()
 
