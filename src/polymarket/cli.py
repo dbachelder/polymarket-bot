@@ -12,29 +12,14 @@ def _print(obj: object) -> None:
 
 
 def cmd_markets_5m(args: argparse.Namespace) -> None:
-    # Best-effort: Gamma doesn't document a canonical "5M" tag in quickstart docs.
-    # We'll search by title patterns and let us refine once we inspect real metadata.
-    search = args.search or "5m"  # broad
-    markets = gamma.get_markets(active=True, closed=False, limit=args.limit, offset=0, search=search)
+    from .site import fetch_predictions_page, parse_next_data, extract_5m_markets
 
-    # Keep only likely 5-minute crypto markets (heuristic)
-    out = []
-    for m in markets:
-        title = (m.get("question") or m.get("title") or "").lower()
-        if "5" in title and "minute" in title:
-            out.append(m)
-        elif "5m" in title:
-            out.append(m)
-        elif "up or down" in title and ("5" in title or "5m" in title):
-            out.append(m)
+    html = fetch_predictions_page("5M")
+    data = parse_next_data(html)
+    ms = extract_5m_markets(data)
+    out = [m.__dict__ for m in ms[: args.limit]]
+    _print({"count": len(out), "markets": out})
 
-    _print(
-        {
-            "generated_at": datetime.now(UTC).isoformat(),
-            "count": len(out),
-            "markets": out,
-        }
-    )
 
 
 def cmd_book(args: argparse.Namespace) -> None:
