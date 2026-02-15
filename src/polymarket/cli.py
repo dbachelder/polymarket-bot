@@ -625,15 +625,15 @@ def cmd_cross_market_scan(args: argparse.Namespace) -> None:
                     print(
                         f"  {opp.venue_yes} YES @ {opp.yes_price:.3f} + "
                         f"{opp.venue_no} NO @ {opp.no_price:.3f} | "
-                        f"Gross: {opp.gross_spread*100:.2f}% | "
-                        f"Net: {opp.net_spread*100:.2f}% | "
+                        f"Gross: {opp.gross_spread * 100:.2f}% | "
+                        f"Net: {opp.net_spread * 100:.2f}% | "
                         f"Conf: {opp.confidence:.2f}"
                     )
 
             # Show performance summary
             summary = strategy.get_performance_report()
             if summary["total_trades"] > 0:
-                print(f"\n--- Performance Summary ---")
+                print("\n--- Performance Summary ---")
                 print(f"Total trades:    {summary['total_trades']}")
                 print(f"Open positions:  {summary['open_positions']}")
                 print(f"Realized PnL:    ${summary['total_realized_pnl']:.2f}")
@@ -662,16 +662,16 @@ def cmd_cross_market_report(args: argparse.Namespace) -> None:
         print(f"Total trades:         {summary['total_trades']}")
         print(f"Open positions:       {summary['open_positions']}")
         print(f"Closed positions:     {summary['closed_positions']}")
-        print(f"Win rate:             {summary['win_rate']*100:.1f}%")
+        print(f"Win rate:             {summary['win_rate'] * 100:.1f}%")
         print(f"\nTotal realized PnL:   ${summary['total_realized_pnl']:.2f}")
         print(f"Total theoretical:    ${summary['total_theoretical_pnl']:.2f}")
         print(f"Combined PnL:         ${summary['total_pnl']:.2f}")
         print(f"\nAvg realized PnL:     ${summary['avg_realized_pnl']:.3f}")
-        print(f"Avg spread captured:  {summary['avg_spread_captured']*100:.2f}%")
+        print(f"Avg spread captured:  {summary['avg_spread_captured'] * 100:.2f}%")
 
-        status = summary.get('trades_by_status', {})
+        status = summary.get("trades_by_status", {})
         if status:
-            print(f"\n--- By Status ---")
+            print("\n--- By Status ---")
             print(f"Open:                 {status.get('open', 0)}")
             print(f"Closed early:         {status.get('closed', 0)}")
             print(f"Held to resolution:   {status.get('held_to_resolution', 0)}")
@@ -707,7 +707,7 @@ def cmd_mention_scan(args: argparse.Namespace) -> None:
         print(f"Trades executed: {result['trades_executed']}")
         print(f"Dry run: {result['dry_run']}")
 
-        if result['summary']:
+        if result["summary"]:
             print("\n--- Summary ---")
             print(f"  Buy YES signals: {result['summary']['buy_yes_count']}")
             print(f"  Buy NO signals:  {result['summary']['buy_no_count']}")
@@ -715,25 +715,27 @@ def cmd_mention_scan(args: argparse.Namespace) -> None:
             print(f"  Avg edge (NO):   {result['summary']['avg_edge_buy_no']:+.1%}")
             print(f"  Avg edge (YES):  {result['summary']['avg_edge_buy_yes']:+.1%}")
 
-        if result['markets']:
+        if result["markets"]:
             print(f"\n--- Mention Markets Found ({len(result['markets'])}) ---")
-            for m in result['markets'][:10]:  # Show first 10
-                target = m['target'] or 'Unknown'
+            for m in result["markets"][:10]:  # Show first 10
+                target = m["target"] or "Unknown"
                 print(f"  {target:<20} | {m['yes_price']:.2f} | {m['question'][:40]}...")
 
-        if result['signals']:
+        if result["signals"]:
             print("\n--- All Signals ---")
-            for sig in result['signals']:
-                market_q = sig['market']['question'][:40] if sig['market']['question'] else "Unknown"
+            for sig in result["signals"]:
+                market_q = (
+                    sig["market"]["question"][:40] if sig["market"]["question"] else "Unknown"
+                )
                 print(
                     f"  {sig['side']:<12} | edge={sig['edge']:+.2f} | "
                     f"market={sig['market_prob']:.2f} | theo={sig['theoretical_prob']:.2f} | {market_q}..."
                 )
 
-        if result['trades']:
+        if result["trades"]:
             print("\n--- Executed Trades ---")
-            for trade in result['trades']:
-                sig = trade['signal']
+            for trade in result["trades"]:
+                sig = trade["signal"]
                 print(
                     f"  {sig['side']:<12} | size={trade['position_size']:.2f} | "
                     f"price={trade['entry_price']:.3f} | "

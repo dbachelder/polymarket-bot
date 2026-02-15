@@ -596,18 +596,20 @@ class TestRunMentionScan:
         # Create multiple markets
         markets = []
         for i in range(5):
-            markets.append({
-                "market_id": f"test{i}",
-                "question": f"Will X{i} mention Y{i}?",
-                "clobTokenIds": [f"yes{i}", f"no{i}"],
-                "endDate": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
-                "books": {
-                    "yes": {
-                        "bids": [{"price": "0.80", "size": "100"}],
-                        "asks": [{"price": "0.82", "size": "100"}],
-                    }
-                },
-            })
+            markets.append(
+                {
+                    "market_id": f"test{i}",
+                    "question": f"Will X{i} mention Y{i}?",
+                    "clobTokenIds": [f"yes{i}", f"no{i}"],
+                    "endDate": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+                    "books": {
+                        "yes": {
+                            "bids": [{"price": "0.80", "size": "100"}],
+                            "asks": [{"price": "0.82", "size": "100"}],
+                        }
+                    },
+                }
+            )
 
         snapshot = {"markets": markets}
         snapshot_file = tmp_path / "snapshot_5m_20260215T120000Z.json"

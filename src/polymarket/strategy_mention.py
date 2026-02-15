@@ -154,7 +154,9 @@ def _extract_mention_target(question: str) -> str | None:
         return target.title() if target else None
 
     # Pattern: mention of [X]
-    of_pattern = r"mention\s+of\s+([^\s]+(?:\s+[^\s]+){0,3})(?:\s+(?:in|during|at|on|by|before|after|for|$))"
+    of_pattern = (
+        r"mention\s+of\s+([^\s]+(?:\s+[^\s]+){0,3})(?:\s+(?:in|during|at|on|by|before|after|for|$))"
+    )
     match = re.search(of_pattern, question_lower)
     if match:
         target = match.group(1).strip().rstrip("?.")
@@ -422,7 +424,9 @@ def generate_signals(
             # EV = (win_prob * win_amount) - (lose_prob * lose_amount)
             win_amount = 1.0 - market_prob
             lose_amount = market_prob
-            expected_value = (theoretical_prob * win_amount) - ((1 - theoretical_prob) * lose_amount)
+            expected_value = (theoretical_prob * win_amount) - (
+                (1 - theoretical_prob) * lose_amount
+            )
             reasoning = (
                 f"YES underpriced: market={market_prob:.2%}, "
                 f"theoretical={theoretical_prob:.2%}, edge={edge:+.1%}"
@@ -440,14 +444,15 @@ def generate_signals(
 
                 # Buy NO when NO is cheap enough (YES is expensive)
                 # and we have sufficient edge
-                if (no_entry_min_price <= no_price <= no_entry_max_price and
-                        no_edge > min_edge):
+                if no_entry_min_price <= no_price <= no_entry_max_price and no_edge > min_edge:
                     side = "buy_no"
                     confidence = min(1.0, abs(no_edge) * 2)
                     # EV for NO side
                     win_amount = 1.0 - no_price
                     lose_amount = no_price
-                    expected_value = (theoretical_no_prob * win_amount) - ((1 - theoretical_no_prob) * lose_amount)
+                    expected_value = (theoretical_no_prob * win_amount) - (
+                        (1 - theoretical_no_prob) * lose_amount
+                    )
                     reasoning = (
                         f"YES overpriced: market={market_prob:.2%}, "
                         f"theoretical={theoretical_prob:.2%}, "
@@ -508,7 +513,9 @@ class MentionTrade:
                 "dry_run": self.order_result.dry_run,
                 "message": self.order_result.message,
                 "order_id": self.order_result.order_id,
-            } if hasattr(self.order_result, "success") else str(self.order_result),
+            }
+            if hasattr(self.order_result, "success")
+            else str(self.order_result),
             "position_size": self.position_size,
             "entry_price": self.entry_price,
         }
