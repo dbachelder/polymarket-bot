@@ -679,6 +679,70 @@ def cmd_cross_market_report(args: argparse.Namespace) -> None:
         print("=" * 70)
 
 
+def cmd_mention_scan(args: argparse.Namespace) -> None:
+    """Scan for mention market opportunities with default-to-NO strategy."""
+    from pathlib import Path
+
+    from .strategy_mention import run_mention_scan
+
+    snapshots_dir = Path(args.snapshots_dir) if args.snapshots_dir else None
+
+    result = run_mention_scan(
+        snapshots_dir=snapshots_dir,
+        base_rate=args.base_rate,
+        dry_run=not args.live,
+        max_positions=args.max_positions,
+    )
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        print("=" * 70)
+        print("MENTION MARKET SCAN RESULTS")
+        print("=" * 70)
+        print(f"Scan time: {result['timestamp']}")
+        print(f"Markets scanned: {result['markets_scanned']}")
+        print(f"Signals generated: {result['signals_generated']}")
+        print(f"Actionable signals: {result['actionable_signals']}")
+        print(f"Trades executed: {result['trades_executed']}")
+        print(f"Dry run: {result['dry_run']}")
+
+        if result['summary']:
+            print("\n--- Summary ---")
+            print(f"  Buy YES signals: {result['summary']['buy_yes_count']}")
+            print(f"  Buy NO signals:  {result['summary']['buy_no_count']}")
+            print(f"  No trade:        {result['summary']['no_trade_count']}")
+            print(f"  Avg edge (NO):   {result['summary']['avg_edge_buy_no']:+.1%}")
+            print(f"  Avg edge (YES):  {result['summary']['avg_edge_buy_yes']:+.1%}")
+
+        if result['markets']:
+            print(f"\n--- Mention Markets Found ({len(result['markets'])}) ---")
+            for m in result['markets'][:10]:  # Show first 10
+                target = m['target'] or 'Unknown'
+                print(f"  {target:<20} | {m['yes_price']:.2f} | {m['question'][:40]}...")
+
+        if result['signals']:
+            print("\n--- All Signals ---")
+            for sig in result['signals']:
+                market_q = sig['market']['question'][:40] if sig['market']['question'] else "Unknown"
+                print(
+                    f"  {sig['side']:<12} | edge={sig['edge']:+.2f} | "
+                    f"market={sig['market_prob']:.2f} | theo={sig['theoretical_prob']:.2f} | {market_q}..."
+                )
+
+        if result['trades']:
+            print("\n--- Executed Trades ---")
+            for trade in result['trades']:
+                sig = trade['signal']
+                print(
+                    f"  {sig['side']:<12} | size={trade['position_size']:.2f} | "
+                    f"price={trade['entry_price']:.3f} | "
+                    f"EV={sig['expected_value']:.3f}"
+                )
+
+        print("\n" + "=" * 70)
+
+
 def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
     """Run orderbook imbalance strategy backtest."""
     from pathlib import Path
@@ -1204,6 +1268,37 @@ def main() -> None:
     )
     cmr.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     cmr.set_defaults(func=cmd_cross_market_report)
+
+    # Mention market scan command
+    mm = sub.add_parser(
+        "mention-scan",
+        help="Scan for mention market opportunities with default-to-NO strategy",
+    )
+    mm.add_argument(
+        "--snapshots-dir",
+        type=str,
+        default=None,
+        help="Directory containing market snapshots",
+    )
+    mm.add_argument(
+        "--base-rate",
+        type=float,
+        default=0.15,
+        help="Historical base rate for mentions (default: 0.15)",
+    )
+    mm.add_argument(
+        "--max-positions",
+        type=int,
+        default=10,
+        help="Maximum positions to take (default: 10)",
+    )
+    mm.add_argument(
+        "--live",
+        action="store_true",
+        help="Execute live trades (default: dry-run)",
+    )
+    mm.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    mm.set_defaults(func=cmd_mention_scan)
 
     args = p.parse_args()
 
