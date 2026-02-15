@@ -2196,6 +2196,11 @@ def main() -> None:
     cb.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     cb.set_defaults(func=cmd_combinatorial_scan)
 
+    # Add trader profiling commands
+    from .trader_cli import add_trader_commands
+
+    add_trader_commands(sub)
+
     args = p.parse_args()
 
     # Handle --raw flag for microstructure command
