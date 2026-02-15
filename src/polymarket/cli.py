@@ -32,6 +32,15 @@ def cmd_price(args: argparse.Namespace) -> None:
     _print(price)
 
 
+def cmd_collect_5m(args: argparse.Namespace) -> None:
+    from pathlib import Path
+
+    from .collector import collect_5m_snapshot
+
+    out = collect_5m_snapshot(Path(args.out))
+    print(str(out))
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="polymarket")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -49,6 +58,10 @@ def main() -> None:
     pp.add_argument("token_id")
     pp.add_argument("--side", choices=["buy", "sell"], default="buy")
     pp.set_defaults(func=cmd_price)
+
+    pc = sub.add_parser("collect-5m", help="Snapshot /predictions/5M + CLOB orderbooks")
+    pc.add_argument("--out", default="data")
+    pc.set_defaults(func=cmd_collect_5m)
 
     args = p.parse_args()
     args.func(args)
