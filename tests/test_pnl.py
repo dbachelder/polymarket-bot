@@ -7,10 +7,8 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
-import pytest
 
 from polymarket.pnl import (
-    DAILY_SUMMARY_DIR,
     BookLevel,
     Fill,
     OrderBook,
