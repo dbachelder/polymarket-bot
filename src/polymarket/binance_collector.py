@@ -400,7 +400,13 @@ class BinanceWebSocketCollector:
                 delay = self._reconnect_delay + random.uniform(0, 1.0)
                 logger.info("Reconnecting in %.1f seconds...", delay)
                 await asyncio.sleep(delay)
+<<<<<<< HEAD
                 self._reconnect_delay = min(self.max_reconnect_delay, self._reconnect_delay * 1.5)
+=======
+                self._reconnect_delay = min(
+                    self.max_reconnect_delay, self._reconnect_delay * 1.5
+                )
+>>>>>>> origin/fix/f80d90a7
 
     def stop(self) -> None:
         """Stop the collector."""
@@ -492,6 +498,7 @@ async def collect_loop_ws(
     out_dir.mkdir(parents=True, exist_ok=True)
     kline_intervals = kline_intervals or ["1m", "5m"]
 
+<<<<<<< HEAD
     collector = BinanceWebSocketCollector(symbol=symbol, max_reconnect_delay=max_reconnect_delay)
 
     def on_snapshot(snapshot: Snapshot) -> None:
@@ -499,12 +506,24 @@ async def collect_loop_ws(
         ts_str = datetime.fromtimestamp(snapshot.timestamp_ms / 1000, tz=UTC).strftime(
             "%Y%m%dT%H%M%SZ"
         )
+=======
+    collector = BinanceWebSocketCollector(
+        symbol=symbol, max_reconnect_delay=max_reconnect_delay
+    )
+
+    def on_snapshot(snapshot: Snapshot) -> None:
+        # Write JSON snapshot
+        ts_str = datetime.fromtimestamp(
+            snapshot.timestamp_ms / 1000, tz=UTC
+        ).strftime("%Y%m%dT%H%M%SZ")
+>>>>>>> origin/fix/f80d90a7
         out_path = out_dir / f"binance_{symbol.lower()}_{ts_str}.json"
         out_path.write_text(json.dumps(snapshot.to_dict(), indent=2, sort_keys=True))
 
         # Write latest pointer
         latest = out_dir / f"latest_{symbol.lower()}.json"
         latest.write_text(
+<<<<<<< HEAD
             json.dumps(
                 {
                     "path": str(out_path),
@@ -512,6 +531,13 @@ async def collect_loop_ws(
                     "timestamp_ms": snapshot.timestamp_ms,
                 }
             )
+=======
+            json.dumps({
+                "path": str(out_path),
+                "generated_at": datetime.now(UTC).isoformat(),
+                "timestamp_ms": snapshot.timestamp_ms,
+            })
+>>>>>>> origin/fix/f80d90a7
         )
 
         # Prune old files if retention is set

@@ -1,4 +1,4 @@
-"""Feature builder for Binance market data.
+"""Feature builder for pricefeed market data (Coinbase/Kraken).
 
 Computes returns over multiple horizons, realized volatility proxy, and signed volume metrics.
 Designed for lead/lag analysis with Polymarket snapshots.
@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 from pandas import Series
 
-from .binance_collector import AggTrade
+from .pricefeed import Trade
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +110,7 @@ class FeatureVector:
     timestamp: str
     timestamp_ms: int
     symbol: str
+    venue: str
     reference_price: float
     returns: list[Returns] = field(default_factory=list)
     realized_vols: list[RealizedVol] = field(default_factory=list)
@@ -120,6 +121,7 @@ class FeatureVector:
             "timestamp": self.timestamp,
             "timestamp_ms": self.timestamp_ms,
             "symbol": self.symbol,
+            "venue": self.venue,
             "reference_price": self.reference_price,
             "returns": [r.to_dict() for r in self.returns],
             "realized_vols": [v.to_dict() for v in self.realized_vols],
@@ -128,7 +130,7 @@ class FeatureVector:
 
 
 class FeatureBuilder:
-    """Build features from Binance market data."""
+    """Build features from pricefeed market data."""
 
     def __init__(
         self,
@@ -144,19 +146,19 @@ class FeatureBuilder:
         self.horizons = horizons or DEFAULT_HORIZONS
         self.vol_windows = vol_windows or self.horizons
 
-    def _trades_to_dataframe(self, trades: list[AggTrade]) -> pd.DataFrame:
+    def _trades_to_dataframe(self, trades: list[Trade]) -> pd.DataFrame:
         """Convert list of trades to pandas DataFrame."""
         if not trades:
             return pd.DataFrame(
-                columns=["timestamp_ms", "price", "quantity", "is_buyer_maker", "signed_volume"]
+                columns=["timestamp_ms", "price", "size", "side", "signed_volume"]
             )
 
         data = [
             {
                 "timestamp_ms": t.timestamp_ms,
                 "price": t.price,
-                "quantity": t.quantity,
-                "is_buyer_maker": t.is_buyer_maker,
+                "size": t.size,
+                "side": t.side,
                 "signed_volume": t.signed_volume,
             }
             for t in trades
@@ -167,13 +169,13 @@ class FeatureBuilder:
 
     def compute_returns(
         self,
-        trades: list[AggTrade],
+        trades: list[Trade],
         reference_time_ms: int | None = None,
     ) -> list[Returns]:
         """Compute returns over configured horizons.
 
         Args:
-            trades: List of aggregated trades
+            trades: List of trades
             reference_time_ms: Reference timestamp (default: latest trade)
 
         Returns:
@@ -228,7 +230,7 @@ class FeatureBuilder:
 
     def compute_realized_vol(
         self,
-        trades: list[AggTrade],
+        trades: list[Trade],
         reference_time_ms: int | None = None,
     ) -> list[RealizedVol]:
         """Compute realized volatility proxy from trade returns.
@@ -236,7 +238,7 @@ class FeatureBuilder:
         Uses log returns between consecutive trades, annualized.
 
         Args:
-            trades: List of aggregated trades
+            trades: List of trades
             reference_time_ms: Reference timestamp (default: latest trade)
 
         Returns:
@@ -297,13 +299,13 @@ class FeatureBuilder:
 
     def compute_volume_metrics(
         self,
-        trades: list[AggTrade],
+        trades: list[Trade],
         reference_time_ms: int | None = None,
     ) -> list[VolumeMetrics]:
         """Compute signed volume metrics.
 
         Args:
-            trades: List of aggregated trades
+            trades: List of trades
             reference_time_ms: Reference timestamp (default: latest trade)
 
         Returns:
@@ -330,17 +332,17 @@ class FeatureBuilder:
             if window_df.empty:
                 continue
 
-            total_qty = cast(float, window_df["quantity"].sum())
+            total_qty = cast(float, window_df["size"].sum())
             total_volume = float(total_qty) if pd.notna(total_qty) else 0.0
             signed_qty = cast(float, window_df["signed_volume"].sum())
             signed_volume = float(signed_qty) if pd.notna(signed_qty) else 0.0
 
-            buy_mask = ~window_df["is_buyer_maker"]
-            sell_mask = window_df["is_buyer_maker"]
+            buy_mask = window_df["side"] == "buy"
+            sell_mask = window_df["side"] == "sell"
 
-            buy_qty = cast(float, window_df.loc[buy_mask, "quantity"].sum())
+            buy_qty = cast(float, window_df.loc[buy_mask, "size"].sum())
             buy_volume = float(buy_qty) if pd.notna(buy_qty) else 0.0
-            sell_qty = cast(float, window_df.loc[sell_mask, "quantity"].sum())
+            sell_qty = cast(float, window_df.loc[sell_mask, "size"].sum())
             sell_volume = float(sell_qty) if pd.notna(sell_qty) else 0.0
             buy_sum = cast(int, buy_mask.sum())
             buy_count = int(buy_sum) if pd.notna(buy_sum) else 0
@@ -348,7 +350,7 @@ class FeatureBuilder:
             sell_count = int(sell_sum) if pd.notna(sell_sum) else 0
 
             # VWAP calculation
-            notional_sum = cast(float, (window_df["price"] * window_df["quantity"]).sum())
+            notional_sum = cast(float, (window_df["price"] * window_df["size"]).sum())
             notional = float(notional_sum) if pd.notna(notional_sum) else 0.0
             vwap = notional / total_volume if total_volume > 0 else 0.0
 
@@ -371,13 +373,15 @@ class FeatureBuilder:
 
     def build_features(
         self,
-        trades: list[AggTrade],
+        trades: list[Trade],
+        venue: str,
         reference_time_ms: int | None = None,
     ) -> FeatureVector:
         """Build complete feature vector from trades.
 
         Args:
-            trades: List of aggregated trades
+            trades: List of trades
+            venue: The venue name
             reference_time_ms: Reference timestamp (default: latest trade)
 
         Returns:
@@ -399,15 +403,13 @@ class FeatureBuilder:
         )
 
         # Extract symbol from trades if available
-        symbol = "BTCUSDT"
-        if trades:
-            # Try to infer from context or use default
-            pass
+        symbol = "BTC-USD"
 
         return FeatureVector(
             timestamp=timestamp,
             timestamp_ms=reference_time_ms or int(datetime.now(UTC).timestamp() * 1000),
             symbol=symbol,
+            venue=venue,
             reference_price=reference_price or 0.0,
             returns=self.compute_returns(trades, reference_time_ms),
             realized_vols=self.compute_realized_vol(trades, reference_time_ms),
@@ -416,28 +418,28 @@ class FeatureBuilder:
 
 
 def align_to_polymarket_snapshots(
-    binance_data_dir: Path,
+    pricefeed_data_dir: Path,
     polymarket_data_dir: Path,
     tolerance_seconds: float = 1.0,
 ) -> list[dict[str, Any]]:
-    """Align Binance features to Polymarket snapshot timestamps.
+    """Align pricefeed features to Polymarket snapshot timestamps.
 
     Args:
-        binance_data_dir: Directory containing Binance snapshot files
+        pricefeed_data_dir: Directory containing pricefeed snapshot files
         polymarket_data_dir: Directory containing Polymarket snapshot files
         tolerance_seconds: Maximum time difference for alignment
 
     Returns:
-        List of aligned (polymarket_timestamp, binance_features) records
+        List of aligned (polymarket_timestamp, pricefeed_features) records
     """
-    # Load Binance snapshots
-    binance_snapshots = []
-    for f in binance_data_dir.glob("binance_*.json"):
+    # Load pricefeed snapshots
+    pf_snapshots = []
+    for f in pricefeed_data_dir.glob("pricefeed_*.json"):
         if "latest" in f.name:
             continue
         try:
             data = json.loads(f.read_text())
-            binance_snapshots.append(data)
+            pf_snapshots.append(data)
         except (json.JSONDecodeError, FileNotFoundError):
             continue
 
@@ -453,7 +455,7 @@ def align_to_polymarket_snapshots(
             continue
 
     # Sort by timestamp
-    binance_snapshots.sort(key=lambda x: x.get("timestamp_ms", 0))
+    pf_snapshots.sort(key=lambda x: x.get("timestamp_ms", 0))
     pm_snapshots.sort(key=lambda x: x.get("generated_at", ""))
 
     aligned = []
@@ -467,51 +469,45 @@ def align_to_polymarket_snapshots(
         pm_time = datetime.fromisoformat(pm_time_str.replace("Z", "+00:00"))
         pm_time_ms = int(pm_time.timestamp() * 1000)
 
-        # Find closest Binance snapshot
+        # Find closest pricefeed snapshot
         closest = None
         min_diff = float("inf")
 
-        for bn_snap in binance_snapshots:
-            bn_time_ms = bn_snap.get("timestamp_ms", 0)
-            diff = abs(bn_time_ms - pm_time_ms) / 1000.0
+        for pf_snap in pf_snapshots:
+            pf_time_ms = pf_snap.get("timestamp_ms", 0)
+            diff = abs(pf_time_ms - pm_time_ms) / 1000.0
             if diff < min_diff:
                 min_diff = diff
-                closest = bn_snap
+                closest = pf_snap
 
         if closest and min_diff <= tolerance_seconds:
-            # Build features from Binance data
+            # Build features from pricefeed data
             trades = [
-                AggTrade(
+                Trade(
                     timestamp_ms=t["timestamp_ms"],
                     price=t["price"],
-                    quantity=t["quantity"],
-                    is_buyer_maker=t["is_buyer_maker"],
+                    size=t["size"],
+                    side=t["side"],
                     trade_id=t["trade_id"],
+                    venue=t["venue"],
+                    raw_data=t,
                 )
                 for t in closest.get("trades", [])
             ]
 
-            features = builder.build_features(trades, pm_time_ms)
+            venue = closest.get("venue", "unknown")
+            features = builder.build_features(trades, venue, pm_time_ms)
 
-<<<<<<< HEAD
             aligned.append(
                 {
                     "polymarket_timestamp": pm_time_str,
-                    "binance_timestamp": closest.get("timestamp"),
+                    "pricefeed_timestamp": closest.get("timestamp"),
                     "time_diff_seconds": min_diff,
+                    "venue": venue,
                     "polymarket_data": pm_snap,
-                    "binance_features": features.to_dict(),
+                    "pricefeed_features": features.to_dict(),
                 }
             )
-=======
-            aligned.append({
-                "polymarket_timestamp": pm_time_str,
-                "binance_timestamp": closest.get("timestamp"),
-                "time_diff_seconds": min_diff,
-                "polymarket_data": pm_snap,
-                "binance_features": features.to_dict(),
-            })
->>>>>>> origin/fix/f80d90a7
 
     return aligned
 
