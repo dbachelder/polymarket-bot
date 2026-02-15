@@ -706,6 +706,132 @@ def cmd_cross_market_report(args: argparse.Namespace) -> None:
         print("=" * 70)
 
 
+def cmd_both_sides_scan(args: argparse.Namespace) -> None:
+    """Scan for both-sides mispricing arbitrage opportunities."""
+    from decimal import Decimal
+
+    from .btc_both_sides_arb import BothSidesArbitrageStrategy
+
+    strategy = BothSidesArbitrageStrategy(
+        position_size=Decimal(str(args.position_size)),
+        check_alignment=args.check_alignment,
+    )
+
+    opportunities = strategy.scan(
+        interval=args.interval,
+        min_spread=Decimal(str(args.min_spread)),
+    )
+
+    if args.format == "json":
+        print(json.dumps([opp.to_dict() for opp in opportunities], indent=2))
+    else:
+        print("=" * 80)
+        print("BOTH-SIDES MISPRICING ARBITRAGE SCAN")
+        print("=" * 80)
+        print(f"Interval: {args.interval}")
+        print(f"Check 15m alignment: {args.check_alignment}")
+        print(f"Min spread: {args.min_spread * 100:.1f}%")
+        print(f"Opportunities found: {len(opportunities)}")
+        print()
+
+        for i, opp in enumerate(opportunities[: args.limit], 1):
+            print(f"--- Opportunity {i} ---")
+            print(f"Market: {opp.market_metadata.get('title', 'N/A')}")
+            print(f"Interval: {opp.interval}")
+            print(f"UP price:   ${float(opp.up_price):.4f}")
+            print(f"DOWN price: ${float(opp.down_price):.4f}")
+            print(f"Sum:        ${float(opp.price_sum):.4f}")
+            print(f"Spread:     {float(opp.spread) * 100:.2f}%")
+            print(f"After fees: {float(opp.spread_after_fees) * 100:.2f}%")
+            if opp.aligned_15m is not None:
+                print(f"15m aligned: {'Yes' if opp.aligned_15m else 'No'}")
+            print(f"Confidence: {float(opp.confidence) * 100:.1f}%")
+            print()
+
+        print("=" * 80)
+
+
+def cmd_both_sides_trade(args: argparse.Namespace) -> None:
+    """Execute paper trades for both-sides arbitrage opportunities."""
+    from decimal import Decimal
+
+    from .btc_both_sides_arb import BothSidesArbitrageStrategy
+
+    strategy = BothSidesArbitrageStrategy(
+        position_size=Decimal(str(args.position_size)),
+        check_alignment=args.check_alignment,
+    )
+
+    if args.scan:
+        # Scan and trade all valid opportunities
+        opportunities = strategy.scan(
+            interval=args.interval,
+            min_spread=Decimal(str(args.min_spread)),
+        )
+        trades = []
+        for opp in opportunities:
+            if opp.is_valid:
+                trade = strategy.paper_trade(opp)
+                trades.append(trade)
+
+        if args.format == "json":
+            print(json.dumps([t.to_dict() for t in trades], indent=2))
+        else:
+            print("=" * 80)
+            print("BOTH-SIDES ARBITRAGE PAPER TRADES")
+            print("=" * 80)
+            print(f"Opportunities found: {len(opportunities)}")
+            print(f"Trades executed: {len(trades)}")
+            print()
+
+            for t in trades:
+                print(f"Trade: {t.trade_id}")
+                print(f"  Market: {t.market_id}")
+                print(f"  Interval: {t.interval}")
+                print(f"  UP entry:   ${float(t.up_entry_price):.4f}")
+                print(f"  DOWN entry: ${float(t.down_entry_price):.4f}")
+                print(f"  Position size: ${float(t.position_size):.2f} per side")
+                print(f"  Total cost: ${float(t.total_cost):.4f}")
+                print(f"  Spread captured: {float(t.spread_at_entry) * 100:.2f}%")
+                if t.aligned_15m is not None:
+                    print(f"  15m aligned: {'Yes' if t.aligned_15m else 'No'}")
+                print()
+
+            print("=" * 80)
+
+
+def cmd_both_sides_stats(args: argparse.Namespace) -> None:
+    """Show both-sides arbitrage strategy statistics."""
+    from decimal import Decimal
+
+    from .btc_both_sides_arb import BothSidesArbitrageStrategy
+
+    strategy = BothSidesArbitrageStrategy(
+        position_size=Decimal(str(args.position_size)),
+    )
+
+    stats = strategy.get_stats()
+
+    if args.format == "json":
+        # Convert Decimals to strings for JSON serialization
+        json_stats = {k: str(v) if isinstance(v, Decimal) else v for k, v in stats.items()}
+        print(json.dumps(json_stats, indent=2))
+    else:
+        print("=" * 80)
+        print("BOTH-SIDES ARBITRAGE STATISTICS")
+        print("=" * 80)
+        print(f"Total opportunities detected: {stats['total_opportunities']}")
+        print(f"Total trades: {stats['total_trades']}")
+        print(f"Open trades: {stats['open_trades']}")
+        print(f"Closed trades: {stats['closed_trades']}")
+        print(f"Total PnL: ${float(stats['total_pnl']):,.2f}")
+        print(f"Average spread: {float(stats['avg_spread']) * 100:.2f}%")
+        if stats["aligned_trades"] + stats["non_aligned_trades"] > 0:
+            print(f"15m aligned trades: {stats['aligned_trades']}")
+            print(f"Non-aligned trades: {stats['non_aligned_trades']}")
+        print("=" * 80)
+
+
 def cmd_mention_scan(args: argparse.Namespace) -> None:
     """Scan for mention market opportunities with default-to-NO strategy."""
     from pathlib import Path
@@ -1362,6 +1488,86 @@ def main() -> None:
     )
     cmr.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     cmr.set_defaults(func=cmd_cross_market_report)
+
+    # Both-sides arbitrage commands
+    bs = sub.add_parser(
+        "both-sides-scan",
+        help="Scan for both-sides mispricing arbitrage opportunities on BTC markets",
+    )
+    bs.add_argument(
+        "--interval",
+        choices=["5m", "15m"],
+        default="5m",
+        help="Market interval to analyze (default: 5m)",
+    )
+    bs.add_argument(
+        "--check-alignment",
+        action="store_true",
+        help="Check 15m alignment for 5m signals",
+    )
+    bs.add_argument(
+        "--min-spread",
+        type=float,
+        default=0.02,
+        help="Minimum spread after fees (default: 0.02 = 2%%)",
+    )
+    bs.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Max opportunities to display",
+    )
+    bs.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    bs.set_defaults(func=cmd_both_sides_scan)
+
+    bst = sub.add_parser(
+        "both-sides-trade",
+        help="Execute paper trades for both-sides arbitrage opportunities",
+    )
+    bst.add_argument(
+        "--interval",
+        choices=["5m", "15m"],
+        default="5m",
+        help="Market interval (default: 5m)",
+    )
+    bst.add_argument(
+        "--check-alignment",
+        action="store_true",
+        help="Check 15m alignment for 5m signals",
+    )
+    bst.add_argument(
+        "--min-spread",
+        type=float,
+        default=0.02,
+        help="Minimum spread after fees (default: 0.02 = 2%%)",
+    )
+    bst.add_argument(
+        "--position-size",
+        type=float,
+        default=100.0,
+        help="Position size per side in $ (default: 100)",
+    )
+    bst.add_argument(
+        "--scan",
+        action="store_true",
+        default=True,
+        help="Scan before trading",
+    )
+    bst.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    bst.set_defaults(func=cmd_both_sides_trade)
+
+    bss = sub.add_parser(
+        "both-sides-stats",
+        help="Show both-sides arbitrage strategy statistics",
+    )
+    bss.add_argument(
+        "--position-size",
+        type=float,
+        default=100.0,
+        help="Position size per side in $ (default: 100)",
+    )
+    bss.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    bss.set_defaults(func=cmd_both_sides_stats)
 
     # Mention market scan command
     mm = sub.add_parser(
