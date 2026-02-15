@@ -20,7 +20,7 @@ class FiveMMarket:
 
 
 _NEXT_DATA_RE = re.compile(
-    r"<script id=\"__NEXT_DATA__\" type=\"application/json\">(.*?)</script>",
+    r"<script[^>]*id=\"__NEXT_DATA__\"[^>]*>(.*?)</script>",
     re.DOTALL,
 )
 
