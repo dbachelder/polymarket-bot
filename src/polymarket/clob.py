@@ -6,7 +6,9 @@ from .endpoints import CLOB_BASE
 
 
 def _client(timeout: float = 20.0) -> httpx.Client:
-    return httpx.Client(base_url=CLOB_BASE, timeout=timeout, headers={"User-Agent": "polymarket-bot/0.1"})
+    return httpx.Client(
+        base_url=CLOB_BASE, timeout=timeout, headers={"User-Agent": "polymarket-bot/0.1"}
+    )
 
 
 def get_price(token_id: str, side: str = "buy") -> dict:

@@ -6,10 +6,14 @@ from .endpoints import GAMMA_BASE
 
 
 def _client(timeout: float = 20.0) -> httpx.Client:
-    return httpx.Client(base_url=GAMMA_BASE, timeout=timeout, headers={"User-Agent": "polymarket-bot/0.1"})
+    return httpx.Client(
+        base_url=GAMMA_BASE, timeout=timeout, headers={"User-Agent": "polymarket-bot/0.1"}
+    )
 
 
-def get_events(active: bool = True, closed: bool = False, limit: int = 50, offset: int = 0) -> list[dict]:
+def get_events(
+    active: bool = True, closed: bool = False, limit: int = 50, offset: int = 0
+) -> list[dict]:
     """Fetch events from Gamma API."""
     params = {
         "active": str(active).lower(),
