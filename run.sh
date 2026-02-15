@@ -46,6 +46,10 @@ case "${1:-}" in
         shift
         $PYTHON -m polymarket.cli health-check "$@"
         ;;
+    watchdog)
+        shift
+        $PYTHON -m polymarket.cli watchdog "$@"
+        ;;
     collect-5m)
         shift
         $PYTHON -m polymarket.cli collect-5m "$@"
