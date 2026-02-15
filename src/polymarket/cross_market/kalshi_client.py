@@ -43,9 +43,7 @@ class KalshiClient:
         self.api_key = api_key
         self.api_secret = api_secret
         self.fee_schedule = fee_schedule or KALSHI_FEE_SCHEDULE
-        self._http = httpx.Client(timeout=30.0, headers={
-            "User-Agent": "polymarket-bot/0.1"
-        })
+        self._http = httpx.Client(timeout=30.0, headers={"User-Agent": "polymarket-bot/0.1"})
 
     def _get_auth_headers(self) -> dict[str, str]:
         """Get authentication headers if credentials are available."""

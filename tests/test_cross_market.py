@@ -1,5 +1,4 @@
-"""Tests for cross-market arbitrage strategy.
-"""
+"""Tests for cross-market arbitrage strategy."""
 
 from datetime import UTC, datetime
 
