@@ -288,9 +288,7 @@ class TestAlignToPolymarketSnapshots:
             ],
             "klines": {},
         }
-        (binance_dir / "binance_btcusdt_20231114T221320Z.json").write_text(
-            json.dumps(binance_snap)
-        )
+        (binance_dir / "binance_btcusdt_20231114T221320Z.json").write_text(json.dumps(binance_snap))
 
         # Create a Polymarket snapshot at same time
         pm_snap = {

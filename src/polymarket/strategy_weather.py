@@ -131,12 +131,29 @@ def _extract_date_from_question(question: str) -> date | None:
 
     # Month patterns
     months = {
-        "january": 1, "february": 2, "march": 3, "april": 4,
-        "may": 5, "june": 6, "july": 7, "august": 8,
-        "september": 9, "october": 10, "november": 11, "december": 12,
-        "jan": 1, "feb": 2, "mar": 3, "apr": 4,
-        "jun": 6, "jul": 7, "aug": 8,
-        "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+        "january": 1,
+        "february": 2,
+        "march": 3,
+        "april": 4,
+        "may": 5,
+        "june": 6,
+        "july": 7,
+        "august": 8,
+        "september": 9,
+        "october": 10,
+        "november": 11,
+        "december": 12,
+        "jan": 1,
+        "feb": 2,
+        "mar": 3,
+        "apr": 4,
+        "jun": 6,
+        "jul": 7,
+        "aug": 8,
+        "sep": 9,
+        "oct": 10,
+        "nov": 11,
+        "dec": 12,
     }
 
     # Pattern: Month DD, YYYY or Month DD
@@ -223,7 +240,9 @@ def find_weather_markets() -> list[WeatherMarket]:
 
         # Extract markets from page data
         # This is similar to extract_5m_markets but for weather
-        dehydrated = data.get("props", {}).get("pageProps", {}).get("dehydratedState", {}).get("queries", [])
+        dehydrated = (
+            data.get("props", {}).get("pageProps", {}).get("dehydratedState", {}).get("queries", [])
+        )
 
         for q in dehydrated:
             state = q.get("state", {})
@@ -277,7 +296,9 @@ def find_weather_markets() -> list[WeatherMarket]:
                                     current_yes_price=yes_price.get("price")
                                 )
                         except Exception as e:
-                            logger.debug("Could not fetch price for %s: %s", weather_market.market_id, e)
+                            logger.debug(
+                                "Could not fetch price for %s: %s", weather_market.market_id, e
+                            )
 
                         markets.append(weather_market)
 
@@ -292,8 +313,17 @@ def _is_weather_market(question: str) -> bool:
     question_lower = question.lower()
 
     weather_keywords = [
-        "temperature", "high temp", "low temp", "degrees", "°f", "fahrenheit",
-        "weather", "forecast", "rain", "snow", "precipitation",
+        "temperature",
+        "high temp",
+        "low temp",
+        "degrees",
+        "°f",
+        "fahrenheit",
+        "weather",
+        "forecast",
+        "rain",
+        "snow",
+        "precipitation",
     ]
 
     return any(kw in question_lower for kw in weather_keywords)
@@ -542,7 +572,9 @@ class WeatherTrade:
                 "dry_run": self.order_result.dry_run,
                 "message": self.order_result.message,
                 "order_id": self.order_result.order_id,
-            } if hasattr(self.order_result, "success") else str(self.order_result),
+            }
+            if hasattr(self.order_result, "success")
+            else str(self.order_result),
             "position_size": self.position_size,
             "entry_price": self.entry_price,
         }

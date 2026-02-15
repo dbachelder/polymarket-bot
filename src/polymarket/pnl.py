@@ -499,7 +499,8 @@ class PnLVerifier:
 
         if market_filter:
             filtered_fills = [
-                f for f in filtered_fills
+                f
+                for f in filtered_fills
                 if f.market_slug and market_filter.lower() in f.market_slug.lower()
             ]
 
@@ -576,9 +577,7 @@ class PnLVerifier:
             )
 
         report.positions = position_details
-        report.unrealized_pnl = sum(
-            Decimal(str(p["unrealized_pnl"])) for p in position_details
-        )
+        report.unrealized_pnl = sum(Decimal(str(p["unrealized_pnl"])) for p in position_details)
         report.net_pnl = report.realized_pnl + report.unrealized_pnl - report.total_fees
         report.mark_to_mid = total_mark_to_mid
         report.liquidation_value = total_liquidation
@@ -601,9 +600,7 @@ class PnLVerifier:
             )
 
         if total_mark_to_mid > 0 and total_liquidation / total_mark_to_mid < Decimal("0.5"):
-            report.warnings.append(
-                "Large liquidation discount - positions may be illiquid"
-            )
+            report.warnings.append("Large liquidation discount - positions may be illiquid")
 
         return report
 

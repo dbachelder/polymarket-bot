@@ -254,7 +254,7 @@ class TestGenerateSignals:
             threshold_temp=80.0,
             condition="above",
             current_yes_price=0.50,  # Market split
-            current_no_price=0.50,   # NO at 0.50 > 0.45 threshold
+            current_no_price=0.50,  # NO at 0.50 > 0.45 threshold
         )
 
         # Consensus says 65°F - low probability (~10%) of being above 80°F

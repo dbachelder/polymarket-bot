@@ -2,17 +2,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from pathlib import Path
+from typing import Any
 
 from . import clob
 from .microstructure import (
+    DEFAULT_CONSISTENCY_THRESHOLD,
     DEFAULT_DEPTH_LEVELS,
     DEFAULT_EXTREME_PIN_THRESHOLD,
     DEFAULT_SPREAD_ALERT_THRESHOLD,
+    DEFAULT_TIGHT_SPREAD_THRESHOLD,
     analyze_snapshot_microstructure,
     generate_microstructure_summary,
     log_microstructure_alerts,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _print(obj: object) -> None:
@@ -139,17 +145,13 @@ def cmd_pnl_verify(args: argparse.Namespace) -> None:
             fills = load_fills_from_file(fills_jsonl_path)
         else:
             print(
-                json.dumps(
-                    {"error": f"No fills.json or fills.jsonl found in {args.data_dir}"}
-                ),
+                json.dumps({"error": f"No fills.json or fills.jsonl found in {args.data_dir}"}),
                 file=__import__("sys").stderr,
             )
             raise SystemExit(1)
     else:
         print(
-            json.dumps(
-                {"error": "Must specify --input or --data-dir"}
-            ),
+            json.dumps({"error": "Must specify --input or --data-dir"}),
             file=__import__("sys").stderr,
         )
         raise SystemExit(1)
@@ -275,6 +277,16 @@ def cmd_microstructure(args: argparse.Namespace) -> None:
         )
         raise SystemExit(1)
 
+    # Load optional BTC context from aligned features file
+    btc_context = None
+    if args.btc_features:
+        btc_features_path = Path(args.btc_features)
+        if btc_features_path.exists():
+            try:
+                btc_context = _load_btc_context(btc_features_path, args.btc_horizon)
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.warning("Failed to load BTC context from %s: %s", btc_features_path, e)
+
     if args.summary:
         # Generate summary with alerts
         summary = generate_microstructure_summary(
@@ -283,6 +295,9 @@ def cmd_microstructure(args: argparse.Namespace) -> None:
             spread_threshold=float(args.spread_threshold),
             extreme_pin_threshold=float(args.extreme_pin_threshold),
             depth_levels=int(args.depth_levels),
+            tight_spread_threshold=float(args.tight_spread_threshold),
+            consistency_threshold=float(args.consistency_threshold),
+            btc_context=btc_context,
         )
 
         if args.format == "json":
@@ -296,12 +311,14 @@ def cmd_microstructure(args: argparse.Namespace) -> None:
             print(f"Snapshot:       {summary['snapshot_path']}")
             print(f"Markets:        {summary['markets_analyzed']}")
             print("\nThresholds:")
-            print(f"  Spread alert:     > {summary['spread_threshold']:.2f}")
+            print(f"  Spread alert:       > {summary['spread_threshold']:.2f}")
             print(
-                f"  Extreme pin:      <= {summary['extreme_pin_threshold']:.2f} "
+                f"  Extreme pin:        <= {summary['extreme_pin_threshold']:.2f} "
                 f"or >= {1.0 - summary['extreme_pin_threshold']:.2f}"
             )
-            print(f"  Depth levels:     {summary['depth_levels']}")
+            print(f"  Tight spread:       <= {summary['tight_spread_threshold']:.2f}")
+            print(f"  Consistency:        <= {summary['consistency_threshold']:.2f}")
+            print(f"  Depth levels:       {summary['depth_levels']}")
 
             if summary["alerts"]:
                 print(f"\n--- ALERTS ({summary['alert_count']}) ---")
@@ -343,6 +360,42 @@ def cmd_microstructure(args: argparse.Namespace) -> None:
             depth_levels=int(args.depth_levels),
         )
         print(json.dumps(analyses, indent=2))
+
+
+def _load_btc_context(features_path: Path, horizon: str) -> dict[str, Any] | None:
+    """Load BTC context from aligned features file.
+
+    Args:
+        features_path: Path to aligned_features.json
+        horizon: Which return horizon to use (e.g., '5m', '1h', '24h')
+
+    Returns:
+        Dict with BTC returns for various horizons, or None if not found.
+    """
+    data = json.loads(features_path.read_text())
+    if not data or not isinstance(data, list):
+        return None
+
+    # Get the most recent record
+    latest = data[-1]
+    binance_features = latest.get("binance_features", {})
+    returns = binance_features.get("returns", [])
+
+    context = {}
+    for ret in returns:
+        h = ret.get("horizon_seconds", 0)
+        simple_ret = ret.get("simple_return")
+        if simple_ret is None:
+            continue
+        # Map horizon seconds to key names
+        if h == 300:  # 5 minutes
+            context["return_5m"] = simple_ret
+        elif h == 3600:  # 1 hour
+            context["return_1h"] = simple_ret
+        elif h == 86400:  # 24 hours
+            context["return_24h"] = simple_ret
+
+    return context if context else None
 
 
 def cmd_binance_collect(args: argparse.Namespace) -> None:
@@ -499,26 +552,30 @@ def cmd_weather_scan(args: argparse.Namespace) -> None:
         print(f"Dry run: {result['dry_run']}")
 
         # Show consensus
-        if result['consensus']:
+        if result["consensus"]:
             print("\n--- Model Consensus ---")
-            for city, cons in result['consensus'].items():
-                print(f"  {city}: high={cons['consensus_high']:.1f}°F, models={cons['model_count']}")
+            for city, cons in result["consensus"].items():
+                print(
+                    f"  {city}: high={cons['consensus_high']:.1f}°F, models={cons['model_count']}"
+                )
 
         # Show signals
-        if result['signals']:
+        if result["signals"]:
             print("\n--- All Signals ---")
-            for sig in result['signals']:
-                market_q = sig['market']['question'][:50] if sig['market']['question'] else "Unknown"
+            for sig in result["signals"]:
+                market_q = (
+                    sig["market"]["question"][:50] if sig["market"]["question"] else "Unknown"
+                )
                 print(
                     f"  {sig['side']:<12} | edge={sig['edge']:+.2f} | "
                     f"EV={sig['expected_value']:.3f} | {market_q}..."
                 )
 
         # Show trades
-        if result['trades']:
+        if result["trades"]:
             print("\n--- Executed Trades ---")
-            for trade in result['trades']:
-                sig = trade['signal']
+            for trade in result["trades"]:
+                sig = trade["signal"]
                 print(
                     f"  {sig['side']:<12} | size={trade['position_size']:.2f} | "
                     f"price={trade['entry_price']:.3f} | "
@@ -568,7 +625,9 @@ def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
             print("=" * 80)
             print(f"Snapshots analyzed: {len(snapshots)}")
             print(f"Target market: {args.target}")
-            print(f"\n{'Rank':<6}{'k':<4}{'theta':<8}{'p_max':<8}{'Trades':<8}{'UP':<6}{'DOWN':<8}{'Avg Conf':<10}")
+            print(
+                f"\n{'Rank':<6}{'k':<4}{'theta':<8}{'p_max':<8}{'Trades':<8}{'UP':<6}{'DOWN':<8}{'Avg Conf':<10}"
+            )
             print("-" * 80)
 
             for i, result in enumerate(results[:10], 1):  # Top 10
@@ -813,10 +872,35 @@ def main() -> None:
         help=f"Alert threshold for extreme price pinning (default: {DEFAULT_EXTREME_PIN_THRESHOLD})",
     )
     ms.add_argument(
+        "--tight-spread-threshold",
+        type=float,
+        default=DEFAULT_TIGHT_SPREAD_THRESHOLD,
+        help=f"Tight spread threshold for suppressing alerts (default: {DEFAULT_TIGHT_SPREAD_THRESHOLD})",
+    )
+    ms.add_argument(
+        "--consistency-threshold",
+        type=float,
+        default=DEFAULT_CONSISTENCY_THRESHOLD,
+        help=f"Probability consistency threshold for suppressing alerts (default: {DEFAULT_CONSISTENCY_THRESHOLD})",
+    )
+    ms.add_argument(
         "--depth-levels",
         type=int,
         default=DEFAULT_DEPTH_LEVELS,
         help=f"Number of book levels for depth calc (default: {DEFAULT_DEPTH_LEVELS})",
+    )
+    ms.add_argument(
+        "--btc-features",
+        type=str,
+        default=None,
+        help="Path to aligned BTC features JSON for alert enrichment",
+    )
+    ms.add_argument(
+        "--btc-horizon",
+        type=str,
+        default="5m",
+        choices=["5m", "1h", "24h"],
+        help="BTC return horizon to display in alerts (default: 5m)",
     )
     ms.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     ms.set_defaults(func=cmd_microstructure)
