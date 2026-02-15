@@ -917,6 +917,156 @@ def cmd_mention_scan(args: argparse.Namespace) -> None:
         print("\n" + "=" * 70)
 
 
+def cmd_news_momentum_scan(args: argparse.Namespace) -> None:
+    """Scan for news-driven momentum trading opportunities."""
+    from pathlib import Path
+
+    from .strategy_news_momentum import NewsItem, SourceReliability, run_news_momentum_scan
+
+    snapshots_dir = Path(args.snapshots_dir) if args.snapshots_dir else None
+
+    # Build news items from CLI arguments or use example
+    if args.headline:
+        news_items = [
+            NewsItem(
+                timestamp=datetime.now(UTC) - timedelta(seconds=args.seconds_ago),
+                source=args.source or "CLI",
+                source_reliability=SourceReliability[args.source_reliability],
+                headline=args.headline,
+                category=None,
+            ),
+        ]
+    else:
+        news_items = None  # Will use example data
+
+    # Build config from CLI args
+    config = {
+        "max_time_since_news_seconds": args.max_time_seconds,
+        "min_edge_for_entry": args.min_edge,
+        "min_confidence": args.min_confidence,
+        "base_position_size": args.base_position_size,
+        "scaled_position_size": args.scaled_position_size,
+        "max_position_size": args.max_position_size,
+        "stop_loss_pct": args.stop_loss,
+        "profit_target_pct": args.profit_target,
+        "max_hold_hours": args.max_hold_hours,
+        "momentum_exit_enabled": args.momentum_exit,
+    }
+
+    result = run_news_momentum_scan(
+        news_items=news_items,
+        snapshots_dir=snapshots_dir,
+        capital=args.capital,
+        dry_run=not args.live,
+        max_positions=args.max_positions,
+        config=config,
+    )
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        print("=" * 70)
+        print("NEWS-DRIVEN MOMENTUM SCAN RESULTS")
+        print("=" * 70)
+        print(f"Scan time: {result['timestamp']}")
+        print(f"News items analyzed: {result['news_items_analyzed']}")
+        print(f"Markets available: {result['markets_available']}")
+        print(f"Signals generated: {result['signals_generated']}")
+        print(f"Actionable signals: {result['actionable_signals']}")
+        print(f"Trades executed: {result['trades_executed']}")
+        print(f"Open positions: {result['open_positions']}")
+        print(f"Dry run: {result['dry_run']}")
+
+        if result["summary"]:
+            print("\n--- Summary ---")
+            print(f"  Buy YES signals: {result['summary']['buy_yes_count']}")
+            print(f"  Buy NO signals:  {result['summary']['buy_no_count']}")
+            print(f"  Avg edge:        {result['summary']['avg_edge']:+.2%}")
+            print(f"  Avg confidence:  {result['summary']['avg_confidence']:.1%}")
+
+        if result["signals"]:
+            print(f"\n--- Top Signals ---")
+            for sig in result["signals"][:10]:
+                market_q = sig["market_question"][:40] if sig["market_question"] else "Unknown"
+                print(
+                    f"  {sig['side']:<12} | edge={sig['edge']:+.2f} | "
+                    f"conf={sig['confidence']:.1%} | {market_q}..."
+                )
+                print(f"    Current: {sig['current_price']:.3f} -> Target: {sig['target_price']:.3f}")
+                print(f"    Source: {sig['news_source']} | {sig['time_since_news_seconds']:.0f}s ago")
+
+        if result["trades"]:
+            print("\n--- Executed Trades ---")
+            for trade in result["trades"]:
+                sig = trade["signal"]
+                print(
+                    f"  {sig['side']:<12} | size={trade['position_size']:.2f} | "
+                    f"price={trade['entry_price']:.3f} | pos_id={trade['position_id']}"
+                )
+
+        print("\n" + "=" * 70)
+
+
+def cmd_news_momentum_positions(args: argparse.Namespace) -> None:
+    """Show news-driven momentum positions and check for exits."""
+    from pathlib import Path
+
+    from .strategy_news_momentum import NewsMomentumTracker, check_position_exits
+
+    data_dir = Path(args.data_dir) if args.data_dir else None
+    tracker = NewsMomentumTracker(data_dir=data_dir)
+
+    # Check for exits if snapshot provided
+    exits = []
+    if args.snapshot:
+        snapshot_path = Path(args.snapshot)
+        exits = check_position_exits(tracker, snapshot_path)
+
+    summary = tracker.get_performance_summary()
+    open_positions = tracker.get_open_positions()
+
+    if args.format == "json":
+        print(json.dumps({
+            "summary": summary,
+            "open_positions": [
+                {
+                    "position_id": p.position_id,
+                    "market": p.market_question,
+                    "side": p.side,
+                    "entry_price": p.entry_price,
+                    "position_size": p.position_size,
+                }
+                for p in open_positions
+            ],
+            "exits_today": exits,
+        }, indent=2))
+    else:
+        print("=" * 70)
+        print("NEWS-DRIVEN MOMENTUM POSITIONS")
+        print("=" * 70)
+
+        print("\n--- Performance Summary ---")
+        print(f"Total trades:     {summary['total_trades']}")
+        print(f"Win rate:         {summary['win_rate']:.1%}")
+        print(f"Total PnL:        ${summary['total_pnl']:,.2f}")
+        print(f"Avg hold time:    {summary['avg_hold_time_hours']:.1f}h")
+
+        print(f"\n--- Open Positions ({len(open_positions)}) ---")
+        for p in open_positions:
+            print(f"\n  {p.position_id}")
+            print(f"    Market: {p.market_question[:50]}...")
+            print(f"    Side: {p.side} | Entry: {p.entry_price:.3f} | Size: {p.position_size:.2f}")
+            if p.peak_price:
+                print(f"    Peak: {p.peak_price:.3f}")
+
+        if exits:
+            print(f"\n--- Exits Triggered ({len(exits)}) ---")
+            for exit_info in exits:
+                print(f"  {exit_info['position_id']}: {exit_info['reason']} | PnL: ${exit_info['pnl']:.2f}")
+
+        print("\n" + "=" * 70)
+
+
 def cmd_watchdog(args: argparse.Namespace) -> None:
     """Run collector watchdog to ensure data freshness."""
     from pathlib import Path
@@ -2454,6 +2604,147 @@ def main() -> None:
     )
     cb.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     cb.set_defaults(func=cmd_combinatorial_scan)
+
+    # News-driven momentum commands
+    nm = sub.add_parser(
+        "news-momentum-scan",
+        help="Scan for news-driven momentum trading opportunities",
+    )
+    nm.add_argument(
+        "--snapshots-dir",
+        type=str,
+        default=None,
+        help="Directory containing market snapshots",
+    )
+    nm.add_argument(
+        "--headline",
+        type=str,
+        default=None,
+        help="News headline to analyze (if not provided, uses example data)",
+    )
+    nm.add_argument(
+        "--source",
+        type=str,
+        default=None,
+        help="News source name",
+    )
+    nm.add_argument(
+        "--source-reliability",
+        type=str,
+        default="MAJOR_OUTLET",
+        choices=["VERIFIED", "MAJOR_OUTLET", "ESTABLISHED", "AGGREGATOR", "RUMOR"],
+        help="Source reliability tier (default: MAJOR_OUTLET)",
+    )
+    nm.add_argument(
+        "--seconds-ago",
+        type=float,
+        default=60,
+        help="How many seconds ago the news broke (default: 60)",
+    )
+    nm.add_argument(
+        "--capital",
+        type=float,
+        default=10000,
+        help="Available capital in USD (default: 10000)",
+    )
+    nm.add_argument(
+        "--max-positions",
+        type=int,
+        default=5,
+        help="Maximum positions to take (default: 5)",
+    )
+    nm.add_argument(
+        "--live",
+        action="store_true",
+        help="Execute live trades (default: dry-run)",
+    )
+    nm.add_argument(
+        "--max-time-seconds",
+        type=float,
+        default=120,
+        help="Max time since news to enter (default: 120)",
+    )
+    nm.add_argument(
+        "--min-edge",
+        type=float,
+        default=0.05,
+        help="Minimum edge for entry (default: 0.05 = 5%%)",
+    )
+    nm.add_argument(
+        "--min-confidence",
+        type=float,
+        default=0.6,
+        help="Minimum confidence threshold (default: 0.6)",
+    )
+    nm.add_argument(
+        "--base-position-size",
+        type=float,
+        default=2.0,
+        help="Base position size %% of capital (default: 2.0)",
+    )
+    nm.add_argument(
+        "--scaled-position-size",
+        type=float,
+        default=10.0,
+        help="Scaled position size %% for high confidence (default: 10.0)",
+    )
+    nm.add_argument(
+        "--max-position-size",
+        type=float,
+        default=15.0,
+        help="Maximum position size %% hard cap (default: 15.0)",
+    )
+    nm.add_argument(
+        "--stop-loss",
+        type=float,
+        default=0.15,
+        help="Stop loss %% (default: 0.15 = 15%%)",
+    )
+    nm.add_argument(
+        "--profit-target",
+        type=float,
+        default=0.20,
+        help="Profit target %% (default: 0.20 = 20%%)",
+    )
+    nm.add_argument(
+        "--max-hold-hours",
+        type=int,
+        default=24,
+        help="Maximum hold time in hours (default: 24)",
+    )
+    nm.add_argument(
+        "--momentum-exit",
+        action="store_true",
+        default=True,
+        help="Enable momentum-based exits (default: True)",
+    )
+    nm.add_argument(
+        "--no-momentum-exit",
+        action="store_false",
+        dest="momentum_exit",
+        help="Disable momentum-based exits",
+    )
+    nm.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    nm.set_defaults(func=cmd_news_momentum_scan)
+
+    nmp = sub.add_parser(
+        "news-momentum-positions",
+        help="Show news-driven momentum positions and check for exits",
+    )
+    nmp.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Data directory for position tracking",
+    )
+    nmp.add_argument(
+        "--snapshot",
+        type=str,
+        default=None,
+        help="Path to snapshot for current prices (triggers exit check)",
+    )
+    nmp.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    nmp.set_defaults(func=cmd_news_momentum_positions)
 
     # Add trader profiling commands
     from .trader_cli import add_trader_commands
