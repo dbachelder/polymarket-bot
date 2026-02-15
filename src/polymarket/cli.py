@@ -425,6 +425,105 @@ def cmd_health_check(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def cmd_weather_forecast(args: argparse.Namespace) -> None:
+    """Fetch weather forecasts for specified cities."""
+    from datetime import date, timedelta
+
+    from .weather import get_consensus_for_cities
+
+    cities = args.cities.split(",") if args.cities else ["nyc", "london"]
+    target_date = date.fromisoformat(args.date) if args.date else date.today() + timedelta(days=1)
+
+    consensus = get_consensus_for_cities(
+        cities=cities,
+        target_date=target_date,
+        min_models=args.min_models,
+    )
+
+    if args.format == "json":
+        print(json.dumps({k: v.to_dict() for k, v in consensus.items()}, indent=2))
+    else:
+        print("=" * 70)
+        print("WEATHER FORECAST CONSENSUS")
+        print("=" * 70)
+        print(f"Target date: {target_date}")
+        print(f"Cities: {', '.join(cities)}")
+        print()
+
+        for city, cons in consensus.items():
+            print(f"\n{city.upper()}")
+            print(f"  Consensus High: {cons.consensus_high:.1f}°F")
+            print(f"  Consensus Low:  {cons.consensus_low:.1f}°F")
+            print(f"  Models used:    {cons.model_count}")
+            print(f"  Agreement:      {cons.agreement_score:.2f}")
+            print("  Model breakdown:")
+            for model in cons.models:
+                print(
+                    f"    {model.model:12} (via {model.source}): "
+                    f"high={model.temp_high:.1f}°F, low={model.temp_low:.1f}°F"
+                )
+
+        print("\n" + "=" * 70)
+
+
+def cmd_weather_scan(args: argparse.Namespace) -> None:
+    """Scan for weather market arbitrage opportunities."""
+    from pathlib import Path
+
+    from .strategy_weather import run_weather_scan
+
+    snapshots_dir = Path(args.snapshots_dir) if args.snapshots_dir else None
+    cities = args.cities.split(",") if args.cities else None
+
+    result = run_weather_scan(
+        snapshots_dir=snapshots_dir,
+        cities=cities,
+        dry_run=not args.live,
+    )
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        print("=" * 70)
+        print("WEATHER ARBITRAGE SCAN RESULTS")
+        print("=" * 70)
+        print(f"Scan time: {result['timestamp']}")
+        print(f"Markets scanned: {result['markets_scanned']}")
+        print(f"Signals generated: {result['signals_generated']}")
+        print(f"Actionable signals: {result['actionable_signals']}")
+        print(f"Trades executed: {result['trades_executed']}")
+        print(f"Dry run: {result['dry_run']}")
+
+        # Show consensus
+        if result['consensus']:
+            print("\n--- Model Consensus ---")
+            for city, cons in result['consensus'].items():
+                print(f"  {city}: high={cons['consensus_high']:.1f}°F, models={cons['model_count']}")
+
+        # Show signals
+        if result['signals']:
+            print("\n--- All Signals ---")
+            for sig in result['signals']:
+                market_q = sig['market']['question'][:50] if sig['market']['question'] else "Unknown"
+                print(
+                    f"  {sig['side']:<12} | edge={sig['edge']:+.2f} | "
+                    f"EV={sig['expected_value']:.3f} | {market_q}..."
+                )
+
+        # Show trades
+        if result['trades']:
+            print("\n--- Executed Trades ---")
+            for trade in result['trades']:
+                sig = trade['signal']
+                print(
+                    f"  {sig['side']:<12} | size={trade['position_size']:.2f} | "
+                    f"price={trade['entry_price']:.3f} | "
+                    f"EV={sig['expected_value']:.3f}"
+                )
+
+        print("\n" + "=" * 70)
+
+
 def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
     """Run orderbook imbalance strategy backtest."""
     from pathlib import Path
@@ -759,6 +858,57 @@ def main() -> None:
     hc.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     hc.add_argument("--fail", action="store_true", help="Exit with error code if unhealthy")
     hc.set_defaults(func=cmd_health_check)
+
+    # Weather forecast command
+    wf = sub.add_parser(
+        "weather-forecast",
+        help="Fetch weather forecasts for specified cities",
+    )
+    wf.add_argument(
+        "--cities",
+        type=str,
+        default="nyc,london",
+        help="Comma-separated list of cities (default: nyc,london)",
+    )
+    wf.add_argument(
+        "--date",
+        type=str,
+        default=None,
+        help="Target date (ISO format, default: tomorrow)",
+    )
+    wf.add_argument(
+        "--min-models",
+        type=int,
+        default=2,
+        help="Minimum models required for consensus (default: 2)",
+    )
+    wf.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    wf.set_defaults(func=cmd_weather_forecast)
+
+    # Weather scan command
+    ws = sub.add_parser(
+        "weather-scan",
+        help="Scan for weather market arbitrage opportunities",
+    )
+    ws.add_argument(
+        "--snapshots-dir",
+        type=str,
+        default=None,
+        help="Directory containing market snapshots",
+    )
+    ws.add_argument(
+        "--cities",
+        type=str,
+        default=None,
+        help="Comma-separated list of cities (default: nyc,london)",
+    )
+    ws.add_argument(
+        "--live",
+        action="store_true",
+        help="Execute live trades (default: dry-run)",
+    )
+    ws.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    ws.set_defaults(func=cmd_weather_scan)
 
     # Orderbook imbalance backtest command
     ib = sub.add_parser(
