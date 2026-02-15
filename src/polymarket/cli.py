@@ -2,8 +2,17 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 
 from . import clob
+from .microstructure import (
+    DEFAULT_DEPTH_LEVELS,
+    DEFAULT_EXTREME_PIN_THRESHOLD,
+    DEFAULT_SPREAD_ALERT_THRESHOLD,
+    analyze_snapshot_microstructure,
+    generate_microstructure_summary,
+    log_microstructure_alerts,
+)
 
 
 def _print(obj: object) -> None:
@@ -45,8 +54,6 @@ def cmd_price(args: argparse.Namespace) -> None:
 
 
 def cmd_collect_5m(args: argparse.Namespace) -> None:
-    from pathlib import Path
-
     from .collector import collect_5m_snapshot
     from .collector_loop import collect_5m_loop
 
@@ -65,8 +72,6 @@ def cmd_collect_5m(args: argparse.Namespace) -> None:
 
 
 def cmd_collect_15m(args: argparse.Namespace) -> None:
-    from pathlib import Path
-
     from .collector import collect_15m_snapshot
 
     out = collect_15m_snapshot(Path(args.out))
@@ -74,8 +79,6 @@ def cmd_collect_15m(args: argparse.Namespace) -> None:
 
 
 def cmd_universe_5m(args: argparse.Namespace) -> None:
-    from pathlib import Path
-
     from .universe import build_universe, save_universe
 
     data = build_universe(cross_check=args.cross_check)
@@ -84,8 +87,6 @@ def cmd_universe_5m(args: argparse.Namespace) -> None:
 
 
 def cmd_collect_15m_loop(args: argparse.Namespace) -> None:
-    from pathlib import Path
-
     from .collector_loop import collect_15m_loop
 
     collect_15m_loop(
@@ -93,21 +94,65 @@ def cmd_collect_15m_loop(args: argparse.Namespace) -> None:
         interval_seconds=float(args.interval_seconds),
         max_backoff_seconds=float(args.max_backoff_seconds),
         retention_hours=args.retention_hours,
+        max_snapshots=args.max_snapshots,
+        microstructure_interval_seconds=float(args.microstructure_interval_seconds),
+        microstructure_target=args.microstructure_target,
+        spread_alert_threshold=float(args.spread_alert_threshold),
+        extreme_pin_threshold=float(args.extreme_pin_threshold),
+        depth_levels=int(args.depth_levels),
     )
 
 
 def cmd_pnl_verify(args: argparse.Namespace) -> None:
-    """Verify PnL from fills data."""
-    from pathlib import Path
+    """Verify PnL from fills data with cash tracking and sanity checks."""
+    from decimal import Decimal
 
-    from .pnl import compute_pnl, load_fills_from_file, load_orderbooks_from_file
+    from .pnl import (
+        PnLVerifier,
+        load_fills_from_file,
+        load_orderbooks_from_file,
+        load_orderbooks_from_snapshot,
+        save_daily_summary,
+    )
 
-    input_path = Path(args.input)
-    if not input_path.exists():
-        print(json.dumps({"error": f"Input file not found: {args.input}"}), file=__import__("sys").stderr)
+    # Determine fills source
+    fills: list = []
+
+    if args.input:
+        input_path = Path(args.input)
+        if not input_path.exists():
+            print(
+                json.dumps({"error": f"Input file not found: {args.input}"}),
+                file=__import__("sys").stderr,
+            )
+            raise SystemExit(1)
+        fills = load_fills_from_file(input_path)
+    elif args.data_dir:
+        # Load from data directory - look for fills.json or fills.jsonl
+        data_dir = Path(args.data_dir)
+        fills_path = data_dir / "fills.json"
+        fills_jsonl_path = data_dir / "fills.jsonl"
+
+        if fills_path.exists():
+            fills = load_fills_from_file(fills_path)
+        elif fills_jsonl_path.exists():
+            fills = load_fills_from_file(fills_jsonl_path)
+        else:
+            print(
+                json.dumps(
+                    {"error": f"No fills.json or fills.jsonl found in {args.data_dir}"}
+                ),
+                file=__import__("sys").stderr,
+            )
+            raise SystemExit(1)
+    else:
+        print(
+            json.dumps(
+                {"error": "Must specify --input or --data-dir"}
+            ),
+            file=__import__("sys").stderr,
+        )
         raise SystemExit(1)
-
-    fills = load_fills_from_file(input_path)
 
     # Load optional orderbooks for liquidation value
     orderbooks = None
@@ -115,44 +160,189 @@ def cmd_pnl_verify(args: argparse.Namespace) -> None:
         books_path = Path(args.books)
         if books_path.exists():
             orderbooks = load_orderbooks_from_file(books_path)
+    elif args.snapshot:
+        snapshot_path = Path(args.snapshot)
+        if snapshot_path.exists():
+            orderbooks = load_orderbooks_from_snapshot(snapshot_path)
+    elif args.data_dir:
+        # Try to load latest snapshot from data directory
+        data_dir = Path(args.data_dir)
+        snapshot_files = sorted(data_dir.glob("snapshot_*.json"))
+        if snapshot_files:
+            orderbooks = load_orderbooks_from_snapshot(snapshot_files[-1])
 
-    report = compute_pnl(fills, orderbooks=orderbooks)
+    # Build verifier
+    starting_cash = Decimal(str(args.starting_cash)) if args.starting_cash else Decimal("0")
+    verifier = PnLVerifier(starting_cash=starting_cash)
+    verifier.add_fills(fills)
+
+    # Compute report
+    report = verifier.compute_pnl(
+        orderbooks=orderbooks,
+        since=args.since,
+        market_filter=args.market,
+    )
+
+    # Save daily summary if requested
+    if args.save_daily:
+        summary_path = save_daily_summary(
+            report,
+            out_dir=Path(args.daily_dir) if args.daily_dir else None,
+        )
+        if args.format == "human":
+            print(f"\nDaily summary saved: {summary_path}")
 
     # Output format
-    output = report.to_dict()
-
     if args.format == "json":
-        print(json.dumps(output, indent=2))
+        print(report.to_json())
     else:
         # Human-readable format
-        print("=" * 60)
+        output = report.to_dict()
+
+        print("=" * 70)
         print("PnL VERIFICATION REPORT")
-        print("=" * 60)
-        print(f"\nTotal Fills:      {output['summary']['total_fills']}")
+        print("=" * 70)
+
+        # Metadata
+        if output["metadata"]["since"]:
+            print(f"Since:            {output['metadata']['since']}")
+        if output["metadata"]["market_filter"]:
+            print(f"Market Filter:    {output['metadata']['market_filter']}")
+        print(f"Generated:        {output['metadata']['generated_at']}")
+
+        print("\n--- Summary ---")
+        print(f"Total Fills:      {output['summary']['total_fills']}")
         print(f"Unique Tokens:    {output['summary']['unique_tokens']}")
+        print(f"Unique Markets:   {output['summary']['unique_markets']}")
+
+        print("\n--- Cash Tracking ---")
+        print(f"Starting Cash:    ${output['cash']['starting_cash']:,.2f}")
+        print(f"Cash Flow:        ${output['cash']['cash_flow_from_fills']:,.2f}")
+        print(f"Ending Cash:      ${output['cash']['ending_cash']:,.2f}")
+
         print("\n--- PnL Breakdown ---")
         print(f"Realized PnL:     ${output['pnl']['realized_pnl']:,.2f}")
         print(f"Unrealized PnL:   ${output['pnl']['unrealized_pnl']:,.2f}")
         print(f"Total Fees:       ${output['pnl']['total_fees']:,.2f}")
         print(f"Net PnL:          ${output['pnl']['net_pnl']:,.2f}")
+
         print("\n--- Liquidation Analysis ---")
-        print(f"Mark to Market:   ${output['liquidation']['mark_to_market']:,.2f}")
+        print(f"Mark to Mid:      ${output['liquidation']['mark_to_mid']:,.2f}")
         print(f"Liquidation Val:  ${output['liquidation']['liquidation_value']:,.2f}")
-        print(f"Discount:         ${output['liquidation']['liquidation_discount']:,.2f} ({output['liquidation']['discount_pct']:.1f}%)")
+        print(
+            f"Discount:         ${output['liquidation']['liquidation_discount']:,.2f} "
+            f"({output['liquidation']['discount_pct']:.1f}%)"
+        )
 
-        if output['positions']:
+        print("\n--- Verification ---")
+        cash_ok = "✓" if output["verification"]["cashflow_conserved"] else "✗"
+        pos_ok = "✓" if output["verification"]["position_verified"] else "✗"
+        print(f"Cashflow:         {cash_ok} Conserved")
+        print(f"Positions:        {pos_ok} Verified")
+
+        if output["positions"]:
             print(f"\n--- Open Positions ({len(output['positions'])}) ---")
-            for pos in output['positions'][:10]:  # Limit to 10
-                print(f"  {pos['token_id'][:40]}...")
+            for pos in output["positions"][:10]:  # Limit to 10
+                slug = pos.get("market_slug", "")
+                token_display = slug if slug else pos["token_id"][:20] + "..."
+                print(f"\n  {token_display}")
                 print(f"    Size: {pos['net_size']:,.2f} @ ${pos['avg_cost_basis']:.3f}")
-                print(f"    Price: ${pos['current_price']:.3f} | Unrealized: ${pos['unrealized_pnl']:,.2f}")
+                print(
+                    f"    Mid:  ${pos['current_price']:.3f} | "
+                    f"Unrealized: ${pos['unrealized_pnl']:,.2f}"
+                )
+                if pos.get("liquidation_value") != pos.get("mark_to_mid"):
+                    print(
+                        f"    Liquid: ${pos['liquidation_value']:,.2f} "
+                        f"(discount: ${pos['mark_to_mid'] - pos['liquidation_value']:,.2f})"
+                    )
 
-        if output['warnings']:
-            print("\n--- Warnings ---")
-            for warning in output['warnings']:
+        if output["verification"]["warnings"]:
+            print(f"\n--- Warnings ({len(output['verification']['warnings'])}) ---")
+            for warning in output["verification"]["warnings"]:
                 print(f"  ! {warning}")
 
-        print("\n" + "=" * 60)
+        print("\n" + "=" * 70)
+
+
+def cmd_microstructure(args: argparse.Namespace) -> None:
+    """Analyze microstructure for markets in a snapshot."""
+    snapshot_path = Path(args.snapshot)
+    if not snapshot_path.exists():
+        print(
+            json.dumps({"error": f"Snapshot file not found: {args.snapshot}"}),
+            file=__import__("sys").stderr,
+        )
+        raise SystemExit(1)
+
+    if args.summary:
+        # Generate summary with alerts
+        summary = generate_microstructure_summary(
+            snapshot_path=snapshot_path,
+            target_market_substring=args.target,
+            spread_threshold=float(args.spread_threshold),
+            extreme_pin_threshold=float(args.extreme_pin_threshold),
+            depth_levels=int(args.depth_levels),
+        )
+
+        if args.format == "json":
+            print(json.dumps(summary, indent=2))
+        else:
+            # Human-readable format
+            print("=" * 70)
+            print("MARKET MICROSTRUCTURE SUMMARY")
+            print("=" * 70)
+            print(f"Generated:      {summary['generated_at']}")
+            print(f"Snapshot:       {summary['snapshot_path']}")
+            print(f"Markets:        {summary['markets_analyzed']}")
+            print("\nThresholds:")
+            print(f"  Spread alert:     > {summary['spread_threshold']:.2f}")
+            print(
+                f"  Extreme pin:      <= {summary['extreme_pin_threshold']:.2f} "
+                f"or >= {1.0 - summary['extreme_pin_threshold']:.2f}"
+            )
+            print(f"  Depth levels:     {summary['depth_levels']}")
+
+            if summary["alerts"]:
+                print(f"\n--- ALERTS ({summary['alert_count']}) ---")
+                for alert in summary["alerts"]:
+                    print(f"  ⚠ {alert}")
+            else:
+                print("\n--- ALERTS ---")
+                print("  ✓ No alerts. Markets appear healthy.")
+
+            if summary["market_summaries"]:
+                print(f"\n--- MARKET DETAILS ({len(summary['market_summaries'])}) ---")
+                for ms in summary["market_summaries"]:
+                    print(f"\n  {ms['market_title']}")
+                    print(
+                        f"    YES: bid={ms.get('yes_best_bid'):.2f} ask={ms.get('yes_best_ask'):.2f} "
+                        f"spread={ms.get('yes_spread'):.2f} imbalance={ms.get('yes_imbalance', 0):+.3f}"
+                    )
+                    print(
+                        f"    NO:  bid={ms.get('no_best_bid'):.2f} ask={ms.get('no_best_ask'):.2f} "
+                        f"spread={ms.get('no_spread'):.2f} imbalance={ms.get('no_imbalance', 0):+.3f}"
+                    )
+                    if ms.get("implied_sum"):
+                        print(
+                            f"    Implied: YES_mid={ms.get('implied_yes_mid', 0):.2f} "
+                            f"NO_mid={ms.get('implied_no_mid', 0):.2f} "
+                            f"sum={ms.get('implied_sum', 0):.2f} "
+                            f"consistency={ms.get('consistency_diff', 0):.3f}"
+                        )
+
+            print("\n" + "=" * 70)
+
+        # Log alerts to stderr as well
+        log_microstructure_alerts(summary)
+    else:
+        # Raw analysis output
+        analyses = analyze_snapshot_microstructure(
+            snapshot_path=snapshot_path,
+            target_market_substring=args.target,
+            depth_levels=int(args.depth_levels),
+        )
+        print(json.dumps(analyses, indent=2))
 
 
 def cmd_binance_collect(args: argparse.Namespace) -> None:
@@ -209,63 +399,6 @@ def cmd_binance_features(args: argparse.Namespace) -> None:
     print(f"Aligned {len(aligned)} records to {out_path}")
 
 
-def cmd_hourly_digest(args: argparse.Namespace) -> None:
-    """Generate hourly digest report from snapshot data."""
-    from pathlib import Path
-
-    from .report import generate_hourly_digest
-
-    data_dir = Path(args.data_dir)
-    digest = generate_hourly_digest(data_dir, interval_seconds=args.interval_seconds)
-    output = digest.to_dict()
-
-    if args.format == "json":
-        print(json.dumps(output, indent=2))
-    else:
-        # Human-readable format
-        health = output["collector_health"]
-        btc = output["btc_microstructure"]
-        strategy = output["paper_strategy"]
-
-        print("=" * 60)
-        print("POLYMARKET HOURLY DIGEST")
-        print("=" * 60)
-        print(f"Generated: {output['generated_at']}")
-
-        print("\n--- Collector Health ---")
-        if health["latest_snapshot_at"]:
-            print(f"Latest snapshot: {health['latest_snapshot_at']}")
-            if health["freshness_seconds"] is not None:
-                print(f"Freshness: {health['freshness_seconds']:.1f}s ago")
-        else:
-            print("Latest snapshot: None found")
-        print(f"Snapshots (last hour): {health['snapshots_last_hour']}/{health['expected_snapshots']}")
-        print(f"Capture rate: {health['capture_rate_pct']:.1f}%")
-        if health["backoff_evidence"]:
-            print("⚠️  Backoff detected (gaps in snapshot sequence)")
-
-        print("\n--- BTC 15m Microstructure ---")
-        print(f"Best bid: {btc['best_bid']}")
-        print(f"Best ask: {btc['best_ask']}")
-        if btc["spread"] is not None:
-            print(f"Spread: {btc['spread']:.4f} ({btc['spread_bps']:.2f} bps)")
-        print(f"Bid depth (top 5): {btc['best_bid_depth']:,.2f}")
-        print(f"Ask depth (top 5): {btc['best_ask_depth']:,.2f}")
-        if btc["depth_imbalance"] is not None:
-            imbalance_pct = btc["depth_imbalance"] * 100
-            side = "bid" if imbalance_pct > 0 else "ask"
-            print(f"Depth imbalance: {imbalance_pct:+.1f}% ({side} heavy)")
-
-        print("\n--- Paper Strategy (Momentum) ---")
-        print(f"Signal: {strategy['signal'].upper()}")
-        print(f"Confidence: {strategy['confidence']*100:.0f}%")
-        if strategy["mid_price_change_1h"] is not None:
-            print(f"1h price change: {strategy['mid_price_change_1h']:+.2f}%")
-        print(f"Reasoning: {strategy['reasoning']}")
-
-        print("\n" + "=" * 60)
-
-
 def cmd_health_check(args: argparse.Namespace) -> None:
     """Check collector health and staleness SLA."""
     from pathlib import Path
@@ -292,111 +425,110 @@ def cmd_health_check(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
-def cmd_pricefeed_loop(args: argparse.Namespace) -> None:
-    """Run pricefeed WebSocket collector loop (Coinbase/Kraken)."""
-    from pathlib import Path
+def cmd_sports_scan(args: argparse.Namespace) -> None:
+    """Scan for sports arbitrage opportunities."""
+    from decimal import Decimal
 
-    from .pricefeed import run_collector_loop
+    from .sports_arbitrage import SportsArbitrageStrategy
 
-    run_collector_loop(
-        out_dir=Path(args.out),
-        venue=args.venue,
-        snapshot_interval_seconds=float(args.snapshot_interval_seconds),
-        max_reconnect_delay=float(args.max_reconnect_delay),
-        retention_hours=args.retention_hours,
+    strategy = SportsArbitrageStrategy(
+        bankroll=Decimal(str(args.bankroll)),
     )
 
+    opportunities = strategy.scan()
 
-def cmd_pricefeed_collect(args: argparse.Namespace) -> None:
-    """Collect pricefeed snapshot via REST API (Coinbase/Kraken)."""
-    from pathlib import Path
+    if args.format == "json":
+        print(json.dumps([opp.to_dict() for opp in opportunities], indent=2))
+    else:
+        print("=" * 80)
+        print("SPORTS ARBITRAGE SCAN")
+        print("=" * 80)
+        print(f"Opportunities found: {len(opportunities)}")
+        print(f"Min edge: {args.min_edge}%")
+        print()
 
-    from .pricefeed import collect_snapshot_rest
+        for i, opp in enumerate(opportunities[: args.limit], 1):
+            print(f"--- Opportunity {i} ---")
+            print(f"Market: {opp.pm_market.get('question', 'N/A')}")
+            print(f"Side: {opp.side.upper()}")
+            print(f"Polymarket implied: {float(opp.pm_implied):.2%}")
+            print(f"Sharp book implied: {float(opp.sharp_implied):.2%}")
+            print(f"Edge: {float(opp.edge):.2%}")
+            print(f"Edge after fees: {float(opp.edge_after_fees):.2%}")
+            print(f"Confidence: {float(opp.confidence):.2%}")
+            print()
 
-    out_path = collect_snapshot_rest(
-        out_dir=Path(args.out),
-        venue=args.venue,
-    )
-    print(str(out_path))
-
-
-def cmd_dataset_join(args: argparse.Namespace) -> None:
-    """Align pricefeed features to Polymarket snapshots."""
-    from pathlib import Path
-
-    from .pricefeed_features import (
-        align_to_polymarket_snapshots,
-        save_aligned_features,
-    )
-
-    pricefeed_dir = Path(args.pricefeed_dir)
-    polymarket_dir = Path(args.polymarket_dir)
-    out_path = Path(args.out)
-
-    aligned = align_to_polymarket_snapshots(
-        pricefeed_data_dir=pricefeed_dir,
-        polymarket_data_dir=polymarket_dir,
-        tolerance_seconds=float(args.tolerance),
-    )
-
-    save_aligned_features(aligned, out_path)
-    print(f"Aligned {len(aligned)} records to {out_path}")
+        print("=" * 80)
 
 
-def cmd_paper_eval(args: argparse.Namespace) -> None:
-    """Run paper PnL evaluation on aligned dataset."""
-    from pathlib import Path
+def cmd_sports_trade(args: argparse.Namespace) -> None:
+    """Execute paper trades for arbitrage opportunities."""
+    from decimal import Decimal
 
-    from .paper_pnl import run_paper_evaluation
+    from .sports_arbitrage import SportsArbitrageStrategy
 
-    aligned_file = Path(args.input)
-    out_file = Path(args.out) if args.out else None
-
-    run_paper_evaluation(
-        aligned_file=aligned_file,
-        out_file=out_file,
-        exit_rule=args.exit_rule,
-        timebox_minutes=args.timebox_minutes,
-        confidence_threshold=args.confidence_threshold,
-        format=args.format,
+    strategy = SportsArbitrageStrategy(
+        bankroll=Decimal(str(args.bankroll)),
     )
 
+    if args.scan:
+        # Scan and trade all opportunities
+        opportunities = strategy.scan()
+        trades = []
+        for opp in opportunities:
+            if opp.is_valid:
+                trade = strategy.paper_trade(opp)
+                trades.append(trade)
 
-def cmd_dataset_pipeline(args: argparse.Namespace) -> None:
-    """One-command pipeline: join pricefeed to PM snapshots + generate baseline report."""
-    from pathlib import Path
+        if args.format == "json":
+            print(json.dumps([t.to_dict() for t in trades], indent=2))
+        else:
+            print("=" * 80)
+            print("SPORTS ARBITRAGE PAPER TRADES")
+            print("=" * 80)
+            print(f"Opportunities found: {len(opportunities)}")
+            print(f"Trades executed: {len(trades)}")
+            print()
 
-    from .paper_pnl import run_paper_evaluation
-    from .pricefeed_features import (
-        align_to_polymarket_snapshots,
-        save_aligned_features,
+            for t in trades:
+                print(f"Trade: {t.trade_id}")
+                print(f"  Market: {t.pm_market_id}")
+                print(f"  Side: {t.side.upper()}")
+                print(f"  Size: ${float(t.size):.2f}")
+                print(f"  Entry: {float(t.entry_price):.4f}")
+                print(f"  Edge: {float(t.edge_at_entry):.2%}")
+                print()
+
+            print("=" * 80)
+
+
+def cmd_sports_stats(args: argparse.Namespace) -> None:
+    """Show sports arbitrage strategy statistics."""
+    from decimal import Decimal
+
+    from .sports_arbitrage import SportsArbitrageStrategy
+
+    strategy = SportsArbitrageStrategy(
+        bankroll=Decimal(str(args.bankroll)),
     )
 
-    pricefeed_dir = Path(args.pricefeed_dir)
-    polymarket_dir = Path(args.polymarket_dir)
-    aligned_out = Path(args.aligned_out)
-    report_out = Path(args.report_out) if args.report_out else None
+    stats = strategy.get_stats()
 
-    # Step 1: Align datasets
-    print("Aligning pricefeed to Polymarket snapshots...")
-    aligned = align_to_polymarket_snapshots(
-        pricefeed_data_dir=pricefeed_dir,
-        polymarket_data_dir=polymarket_dir,
-        tolerance_seconds=float(args.tolerance),
-    )
-    save_aligned_features(aligned, aligned_out)
-    print(f"  Aligned {len(aligned)} records to {aligned_out}")
-
-    # Step 2: Run paper evaluation
-    print("Running paper PnL evaluation...")
-    run_paper_evaluation(
-        aligned_file=aligned_out,
-        out_file=report_out,
-        exit_rule=args.exit_rule,
-        timebox_minutes=args.timebox_minutes,
-        confidence_threshold=args.confidence_threshold,
-        format=args.format,
-    )
+    if args.format == "json":
+        # Convert Decimals to strings for JSON serialization
+        json_stats = {k: str(v) if isinstance(v, Decimal) else v for k, v in stats.items()}
+        print(json.dumps(json_stats, indent=2))
+    else:
+        print("=" * 80)
+        print("SPORTS ARBITRAGE STATISTICS")
+        print("=" * 80)
+        print(f"Total opportunities detected: {stats['total_opportunities']}")
+        print(f"Total trades: {stats['total_trades']}")
+        print(f"Open trades: {stats['open_trades']}")
+        print(f"Closed trades: {stats['closed_trades']}")
+        print(f"Total PnL: ${float(stats['total_pnl']):,.2f}")
+        print(f"Average edge: {float(stats['avg_edge']):.2%}")
+        print("=" * 80)
 
 
 def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
@@ -411,63 +543,88 @@ def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
 
     data_dir = Path(args.data_dir)
 
-    if args.sweep:
-        results = parameter_sweep(
-            data_dir=data_dir,
-            interval=args.interval,
-            target=args.target,
+    # Load snapshots
+    snapshots = load_snapshots_for_backtest(
+        data_dir=data_dir,
+        interval=args.interval,
+    )
+
+    if not snapshots:
+        print(
+            json.dumps({"error": f"No snapshots found in {data_dir} for interval {args.interval}"}),
+            file=__import__("sys").stderr,
         )
-        output = {
-            "results": [r.to_dict() for r in results],
-            "best": max(results, key=lambda x: x.sharpe_ratio).to_dict() if results else None,
-        }
+        raise SystemExit(1)
+
+    if args.sweep:
+        # Parameter sweep
+        results = parameter_sweep(
+            snapshots=snapshots,
+            target_market_substring=args.target,
+        )
+
+        if args.format == "json":
+            print(json.dumps({"results": results}, indent=2))
+        else:
+            print("=" * 80)
+            print("ORDERBOOK IMBALANCE STRATEGY - PARAMETER SWEEP")
+            print("=" * 80)
+            print(f"Snapshots analyzed: {len(snapshots)}")
+            print(f"Target market: {args.target}")
+            print(f"\n{'Rank':<6}{'k':<4}{'theta':<8}{'p_max':<8}{'Trades':<8}{'UP':<6}{'DOWN':<8}{'Avg Conf':<10}")
+            print("-" * 80)
+
+            for i, result in enumerate(results[:10], 1):  # Top 10
+                p = result["params"]
+                m = result["metrics"]
+                print(
+                    f"{i:<6}{p['k']:<4}{p['theta']:<8.2f}{p['p_max']:<8.2f}"
+                    f"{m['total_trades']:<8}{m['up_trades']:<6}{m['down_trades']:<8}"
+                    f"{m['avg_confidence']:<10.3f}"
+                )
+
+            print("=" * 80)
+
     else:
+        # Single backtest run
         result = run_backtest(
-            data_dir=data_dir,
-            interval=args.interval,
+            snapshots=snapshots,
             k=args.k,
             theta=args.theta,
             p_max=args.p_max,
-            target=args.target,
+            target_market_substring=args.target,
         )
-        output = result.to_dict()
 
-    if args.format == "json":
-        print(json.dumps(output, indent=2))
-    else:
-        if args.sweep:
-            print("=" * 60)
-            print("PARAMETER SWEEP RESULTS")
-            print("=" * 60)
-            sorted_results = sorted(output["results"], key=lambda x: x["sharpe_ratio"], reverse=True)
-            print(f"\nTop 5 by Sharpe ratio:")
-            for i, r in enumerate(sorted_results[:5], 1):
-                print(f"  {i}. k={r['k']}, θ={r['theta']:.2f}, p_max={r['p_max']:.2f}")
-                print(f"     Sharpe: {r['sharpe_ratio']:.3f} | PnL: ${r['total_pnl']:.2f} | Trades: {r['total_trades']}")
-            if output["best"]:
-                best = output["best"]
-                print(f"\nBest: k={best['k']}, θ={best['theta']:.2f}, p_max={best['p_max']:.2f}")
-                print(f"      Sharpe: {best['sharpe_ratio']:.3f}")
+        if args.format == "json":
+            print(json.dumps(result.to_dict(), indent=2))
         else:
-            print("=" * 60)
-            print("BACKTEST RESULTS")
-            print("=" * 60)
-            r = output
-            print(f"\nParameters: k={r['k']}, θ={r['theta']:.2f}, p_max={r['p_max']:.2f}")
-            print(f"Total PnL: ${r['total_pnl']:.2f}")
-            print(f"Sharpe Ratio: {r['sharpe_ratio']:.3f}")
-            print(f"Total Trades: {r['total_trades']}")
-            print(f"Win Rate: {r['win_rate_pct']:.1f}%")
-            print(f"Avg Trade: ${r['avg_trade_pnl']:.2f}")
-            print(f"Max Drawdown: {r['max_drawdown_pct']:.2f}%")
-            print(f"Profit Factor: {r['profit_factor']:.2f}")
-            print("\n--- Trades ---")
-            for t in r['trades'][:10]:  # Show first 10
-                pnl_str = f"${t['pnl']:+.2f}"
-                print(f"  {t['timestamp']} | {t['direction']:>4} @ {t['entry_price']:.3f} → {t['exit_price']:.3f} | {pnl_str}")
-            if len(r['trades']) > 10:
-                print(f"  ... and {len(r['trades']) - 10} more trades")
-        print("\n" + "=" * 60)
+            print("=" * 80)
+            print("ORDERBOOK IMBALANCE STRATEGY - BACKTEST RESULTS")
+            print("=" * 80)
+            print(f"Snapshots analyzed: {len(snapshots)}")
+            print(f"Target market: {args.target}")
+            print("\nParameters:")
+            print(f"  k (depth levels):     {args.k}")
+            print(f"  theta (threshold):    {args.theta:.2f}")
+            print(f"  p_max (max price):    {args.p_max:.2f}")
+
+            print("\n--- Results ---")
+            print(f"Total trades:     {result.metrics['total_trades']}")
+            print(f"UP trades:        {result.metrics['up_trades']}")
+            print(f"DOWN trades:      {result.metrics['down_trades']}")
+            print(f"Avg confidence:   {result.metrics['avg_confidence']:.3f}")
+            print(f"Avg entry price:  {result.metrics['avg_entry_price']:.3f}")
+
+            if result.trades:
+                print("\n--- Recent Trades (last 10) ---")
+                for t in result.trades[-10:]:
+                    print(
+                        f"  {t.timestamp.strftime('%H:%M')} | {t.decision:<6} | "
+                        f"imb={t.imbalance_value:.3f} | mid={t.mid_yes:.3f} | "
+                        f"entry={t.entry_price:.3f} | conf={t.confidence:.2f}"
+                    )
+
+            print("=" * 80)
 
 
 def main() -> None:
@@ -475,86 +632,227 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     p5 = sub.add_parser("markets-5m", help="Heuristic fetch of likely 5-minute markets")
-    p5.add_argument("--limit", type=int, default=20)
+    p5.add_argument("--limit", type=int, default=50)
+    p5.add_argument("--search", type=str, default=None)
     p5.set_defaults(func=cmd_markets_5m)
 
-    p15 = sub.add_parser("markets-15m", help="Fetch 15-minute crypto markets")
-    p15.add_argument("--limit", type=int, default=20)
-    p15.set_defaults(func=cmd_markets_15m)
-
-    pb = sub.add_parser("book", help="Get order book for a token")
+    pb = sub.add_parser("book", help="Fetch CLOB orderbook for a token_id")
     pb.add_argument("token_id")
     pb.set_defaults(func=cmd_book)
 
-    pp = sub.add_parser("price", help="Get mid price for a token")
+    pp = sub.add_parser("price", help="Fetch CLOB price for a token_id")
     pp.add_argument("token_id")
-    pp.add_argument("--side", default="buy")
+    pp.add_argument("--side", choices=["buy", "sell"], default="buy")
     pp.set_defaults(func=cmd_price)
 
-    # 5m collection
-    c5 = sub.add_parser("collect-5m", help="Collect 5m market data")
-    c5.add_argument("--out", default="data/5m")
-    c5.add_argument("--every-seconds", type=float, default=None)
-    c5.add_argument("--max-backoff-seconds", type=float, default=60.0)
-    c5.add_argument("--retention-hours", type=int, default=48)
-    c5.set_defaults(func=cmd_collect_5m)
+    pc = sub.add_parser("collect-5m", help="Snapshot /predictions/5M + CLOB orderbooks")
+    pc.add_argument("--out", default="data")
+    pc.add_argument(
+        "--every-seconds",
+        type=float,
+        default=None,
+        help="Enable continuous collection mode (interval in seconds)",
+    )
+    pc.add_argument(
+        "--max-backoff-seconds",
+        type=float,
+        default=60.0,
+        help="Max backoff on errors (default: 60)",
+    )
+    pc.add_argument(
+        "--retention-hours", type=float, default=None, help="Prune snapshots older than N hours"
+    )
+    pc.set_defaults(func=cmd_collect_5m)
 
-    # 15m collection
-    c15 = sub.add_parser("collect-15m", help="Collect 15m crypto market data (single)")
-    c15.add_argument("--out", default="data/15m")
-    c15.set_defaults(func=cmd_collect_15m)
+    pu = sub.add_parser("universe-5m", help="Build normalized market universe from /predictions/5M")
+    pu.add_argument("--out", default="data/universe.json", help="Output JSON file path")
+    pu.add_argument("--cross-check", action="store_true", help="Verify against Gamma API")
+    pu.set_defaults(func=cmd_universe_5m)
 
-    c15l = sub.add_parser("collect-15m-loop", help="Collect 15m data in a loop")
-    c15l.add_argument("--out", default="data/15m")
-    c15l.add_argument("--interval-seconds", type=float, default=5.0)
-    c15l.add_argument("--max-backoff-seconds", type=float, default=60.0)
-    c15l.add_argument("--retention-hours", type=int, default=48)
-    c15l.set_defaults(func=cmd_collect_15m_loop)
+    p15 = sub.add_parser("markets-15m", help="Heuristic fetch of 15-minute crypto interval markets")
+    p15.add_argument("--limit", type=int, default=50)
+    p15.set_defaults(func=cmd_markets_15m)
 
-    # Universe
-    uni = sub.add_parser("universe-5m", help="Build and save 5m market universe")
-    uni.add_argument("--out", default="data/universe.json")
-    uni.add_argument("--cross-check", action="store_true", default=False)
-    uni.set_defaults(func=cmd_universe_5m)
+    pc15 = sub.add_parser("collect-15m", help="Snapshot /crypto/15M + CLOB orderbooks")
+    pc15.add_argument("--out", default="data")
+    pc15.set_defaults(func=cmd_collect_15m)
 
-    # PnL verification
-    pnl = sub.add_parser("pnl-verify", help="Verify PnL from fills data")
-    pnl.add_argument("input", help="Path to fills JSON file")
-    pnl.add_argument("--books", help="Optional path to orderbooks JSON for liquidation value")
-    pnl.add_argument("--format", choices=["json", "human"], default="human")
+    pc15l = sub.add_parser(
+        "collect-15m-loop", help="Continuously snapshot /crypto/15M + CLOB orderbooks"
+    )
+    pc15l.add_argument("--out", default="data")
+    pc15l.add_argument(
+        "--interval-seconds",
+        type=float,
+        default=60.0,
+        help="Collection interval in seconds (default: 60)",
+    )
+    pc15l.add_argument(
+        "--max-backoff-seconds", type=float, default=60.0, help="Max backoff on errors"
+    )
+    pc15l.add_argument(
+        "--retention-hours",
+        type=float,
+        default=24.0,
+        help="Prune snapshots older than N hours (default: 24)",
+    )
+    pc15l.add_argument(
+        "--max-snapshots",
+        type=int,
+        default=1440,
+        help="Max snapshots to retain (default: 1440 ~= 24h at 60s)",
+    )
+    pc15l.add_argument(
+        "--microstructure-interval-seconds",
+        type=float,
+        default=60.0,
+        help="Seconds between microstructure analyses",
+    )
+    pc15l.add_argument(
+        "--microstructure-target",
+        type=str,
+        default="bitcoin",
+        help="Target market substring filter (e.g., 'bitcoin')",
+    )
+    pc15l.add_argument(
+        "--spread-alert-threshold",
+        type=float,
+        default=DEFAULT_SPREAD_ALERT_THRESHOLD,
+        help=f"Alert threshold for spread (default: {DEFAULT_SPREAD_ALERT_THRESHOLD})",
+    )
+    pc15l.add_argument(
+        "--extreme-pin-threshold",
+        type=float,
+        default=DEFAULT_EXTREME_PIN_THRESHOLD,
+        help=f"Alert threshold for extreme price pinning (default: {DEFAULT_EXTREME_PIN_THRESHOLD})",
+    )
+    pc15l.add_argument(
+        "--depth-levels",
+        type=int,
+        default=DEFAULT_DEPTH_LEVELS,
+        help=f"Number of book levels for depth calc (default: {DEFAULT_DEPTH_LEVELS})",
+    )
+    pc15l.set_defaults(func=cmd_collect_15m_loop)
+
+    # Enhanced PnL verify command
+    pnl = sub.add_parser(
+        "pnl-verify",
+        help="Verify PnL from fills with cash tracking, sanity checks, and liquidation value",
+    )
+    pnl.add_argument(
+        "--input",
+        default=None,
+        help="Path to fills JSON/JSONL file (alternative to --data-dir)",
+    )
+    pnl.add_argument(
+        "--data-dir",
+        default=None,
+        help="Data directory containing fills.json or fills.jsonl",
+    )
+    pnl.add_argument(
+        "--books",
+        default=None,
+        help="Path to orderbooks JSON for liquidation value calculation",
+    )
+    pnl.add_argument(
+        "--snapshot",
+        default=None,
+        help="Path to collector snapshot for orderbook data",
+    )
+    pnl.add_argument(
+        "--since",
+        default=None,
+        help="ISO timestamp to filter fills (inclusive)",
+    )
+    pnl.add_argument(
+        "--market",
+        default=None,
+        help="Market slug filter (substring match)",
+    )
+    pnl.add_argument(
+        "--starting-cash",
+        type=float,
+        default=0.0,
+        help="Starting cash balance (default: 0)",
+    )
+    pnl.add_argument(
+        "--save-daily",
+        action="store_true",
+        help="Save daily summary to data/pnl/",
+    )
+    pnl.add_argument(
+        "--daily-dir",
+        default=None,
+        help="Custom directory for daily summaries (default: data/pnl/)",
+    )
+    pnl.add_argument(
+        "--format",
+        choices=["json", "human"],
+        default="human",
+        help="Output format",
+    )
     pnl.set_defaults(func=cmd_pnl_verify)
 
-    # Binance collection
-    bc = sub.add_parser("binance-collect", help="Collect Binance BTC market data (REST)")
-    bc.add_argument("--out", default="data/binance")
-    bc.add_argument("--symbol", default="BTCUSDT")
-    bc.add_argument("--intervals", nargs="+", default=["1m", "5m", "15m"])
+    ms = sub.add_parser("microstructure", help="Analyze market microstructure from snapshot")
+    ms.add_argument("--snapshot", required=True, help="Path to snapshot JSON file")
+    ms.add_argument("--target", type=str, default="bitcoin", help="Target market substring filter")
+    ms.add_argument(
+        "--summary",
+        action="store_true",
+        default=True,
+        help="Generate summary with alerts (default)",
+    )
+    ms.add_argument("--raw", action="store_true", help="Output raw analysis without summary")
+    ms.add_argument(
+        "--spread-threshold",
+        type=float,
+        default=DEFAULT_SPREAD_ALERT_THRESHOLD,
+        help=f"Alert threshold for spread (default: {DEFAULT_SPREAD_ALERT_THRESHOLD})",
+    )
+    ms.add_argument(
+        "--extreme-pin-threshold",
+        type=float,
+        default=DEFAULT_EXTREME_PIN_THRESHOLD,
+        help=f"Alert threshold for extreme price pinning (default: {DEFAULT_EXTREME_PIN_THRESHOLD})",
+    )
+    ms.add_argument(
+        "--depth-levels",
+        type=int,
+        default=DEFAULT_DEPTH_LEVELS,
+        help=f"Number of book levels for depth calc (default: {DEFAULT_DEPTH_LEVELS})",
+    )
+    ms.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    ms.set_defaults(func=cmd_microstructure)
+
+    # Binance commands
+    bc = sub.add_parser("binance-collect", help="Collect Binance BTC market data (single snapshot)")
+    bc.add_argument("--out", default="data/binance", help="Output directory")
+    bc.add_argument("--symbol", default="BTCUSDT", help="Trading pair symbol (default: BTCUSDT)")
+    bc.add_argument("--intervals", nargs="+", default=["1m", "5m"], help="Kline intervals to fetch")
     bc.set_defaults(func=cmd_binance_collect)
 
-    bl = sub.add_parser("binance-loop", help="Run Binance WebSocket collector loop")
-    bl.add_argument("--out", default="data/binance")
-    bl.add_argument("--symbol", default="BTCUSDT")
-    bl.add_argument("--intervals", nargs="+", default=["1m", "5m", "15m"])
-    bl.add_argument("--snapshot-interval-seconds", type=float, default=5.0)
-    bl.add_argument("--max-reconnect-delay", type=float, default=60.0)
-    bl.add_argument("--retention-hours", type=int, default=48)
-    bl.set_defaults(func=cmd_binance_loop)
+    bcl = sub.add_parser("binance-loop", help="Continuously collect Binance data via WebSocket")
+    bcl.add_argument("--out", default="data/binance", help="Output directory")
+    bcl.add_argument("--symbol", default="BTCUSDT", help="Trading pair symbol")
+    bcl.add_argument(
+        "--intervals", nargs="+", default=["1m", "5m"], help="Kline intervals to subscribe"
+    )
+    bcl.add_argument(
+        "--snapshot-interval-seconds", type=float, default=5.0, help="Snapshot interval"
+    )
+    bcl.add_argument(
+        "--max-reconnect-delay", type=float, default=60.0, help="Max reconnection delay"
+    )
+    bcl.add_argument("--retention-hours", type=float, default=None, help="Prune old files")
+    bcl.set_defaults(func=cmd_binance_loop)
 
-    bf = sub.add_parser("binance-features", help="Build features from Binance data")
-    bf.add_argument("--binance-dir", default="data/binance")
-    bf.add_argument("--polymarket-dir", default="data/15m")
-    bf.add_argument("--out", default="data/binance_features.json")
-    bf.add_argument("--tolerance", type=float, default=2.0)
+    bf = sub.add_parser("binance-align", help="Align Binance features to Polymarket snapshots")
+    bf.add_argument("--binance-dir", default="data/binance", help="Binance data directory")
+    bf.add_argument("--polymarket-dir", default="data", help="Polymarket data directory")
+    bf.add_argument("--out", default="data/aligned_features.json", help="Output file")
+    bf.add_argument("--tolerance", type=float, default=1.0, help="Alignment tolerance in seconds")
     bf.set_defaults(func=cmd_binance_features)
 
-    # Hourly digest (from base branch)
-    hd = sub.add_parser("hourly-digest", help="Generate hourly digest report")
-    hd.add_argument("--data-dir", default="data/15m")
-    hd.add_argument("--interval-seconds", type=float, default=5.0)
-    hd.add_argument("--format", choices=["json", "human"], default="human")
-    hd.set_defaults(func=cmd_hourly_digest)
-
-    # Health check (from pricefeed branch)
     hc = sub.add_parser("health-check", help="Check collector health and staleness SLA")
     hc.add_argument("--data-dir", default="data", help="Data directory containing snapshots")
     hc.add_argument(
@@ -568,176 +866,24 @@ def main() -> None:
     hc.add_argument("--fail", action="store_true", help="Exit with error code if unhealthy")
     hc.set_defaults(func=cmd_health_check)
 
-    # Pricefeed commands (from pricefeed branch)
-    pfl = sub.add_parser(
-        "pricefeed-loop",
-        help="Continuously collect pricefeed data via WebSocket (Coinbase/Kraken)",
-    )
-    pfl.add_argument("--out", default="data/pricefeed", help="Output directory")
-    pfl.add_argument(
-        "--venue",
-        choices=["coinbase", "kraken"],
-        default="coinbase",
-        help="Pricefeed venue (default: coinbase)",
-    )
-    pfl.add_argument(
-        "--snapshot-interval-seconds",
-        type=float,
-        default=1.0,
-        help="Snapshot interval in seconds (default: 1)",
-    )
-    pfl.add_argument(
-        "--max-reconnect-delay",
-        type=float,
-        default=60.0,
-        help="Max reconnection delay in seconds (default: 60)",
-    )
-    pfl.add_argument(
-        "--retention-hours",
-        type=float,
-        default=None,
-        help="Prune snapshots older than N hours",
-    )
-    pfl.set_defaults(func=cmd_pricefeed_loop)
+    # Sports arbitrage commands
+    sp = sub.add_parser("sports-scan", help="Scan for sports arbitrage opportunities")
+    sp.add_argument("--bankroll", type=float, default=10000.0, help="Paper trading bankroll")
+    sp.add_argument("--min-edge", type=float, default=2.0, help="Minimum edge percentage")
+    sp.add_argument("--limit", type=int, default=10, help="Max opportunities to display")
+    sp.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    sp.set_defaults(func=cmd_sports_scan)
 
-    pfc = sub.add_parser(
-        "pricefeed-collect",
-        help="Collect pricefeed snapshot via REST API (single shot)",
-    )
-    pfc.add_argument("--out", default="data/pricefeed", help="Output directory")
-    pfc.add_argument(
-        "--venue",
-        choices=["coinbase", "kraken"],
-        default="coinbase",
-        help="Pricefeed venue (default: coinbase)",
-    )
-    pfc.set_defaults(func=cmd_pricefeed_collect)
+    spt = sub.add_parser("sports-trade", help="Execute paper trades for arbitrage opportunities")
+    spt.add_argument("--bankroll", type=float, default=10000.0, help="Paper trading bankroll")
+    spt.add_argument("--scan", action="store_true", default=True, help="Scan before trading")
+    spt.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    spt.set_defaults(func=cmd_sports_trade)
 
-    # Dataset join command (pricefeed + polymarket)
-    dj = sub.add_parser(
-        "dataset-join",
-        help="Align pricefeed features to Polymarket snapshots",
-    )
-    dj.add_argument(
-        "--pricefeed-dir",
-        default="data/pricefeed",
-        help="Pricefeed data directory",
-    )
-    dj.add_argument(
-        "--polymarket-dir",
-        default="data",
-        help="Polymarket data directory",
-    )
-    dj.add_argument(
-        "--out",
-        default="data/aligned_pricefeed.json",
-        help="Output file for aligned features",
-    )
-    dj.add_argument(
-        "--tolerance",
-        type=float,
-        default=1.0,
-        help="Alignment tolerance in seconds (default: 1)",
-    )
-    dj.set_defaults(func=cmd_dataset_join)
-
-    # Paper PnL evaluation command
-    pe = sub.add_parser(
-        "paper-eval",
-        help="Run paper PnL evaluation on aligned dataset",
-    )
-    pe.add_argument(
-        "--input",
-        default="data/aligned_pricefeed.json",
-        help="Aligned dataset file",
-    )
-    pe.add_argument(
-        "--out",
-        default=None,
-        help="Output file for report (optional)",
-    )
-    pe.add_argument(
-        "--exit-rule",
-        choices=["mark_at_end", "timebox"],
-        default="mark_at_end",
-        help="Exit rule (default: mark_at_end)",
-    )
-    pe.add_argument(
-        "--timebox-minutes",
-        type=float,
-        default=15.0,
-        help="Time limit for timebox exit in minutes (default: 15)",
-    )
-    pe.add_argument(
-        "--confidence-threshold",
-        type=float,
-        default=0.6,
-        help="Minimum confidence to take a trade (default: 0.6)",
-    )
-    pe.add_argument(
-        "--format",
-        choices=["json", "human"],
-        default="human",
-        help="Output format",
-    )
-    pe.set_defaults(func=cmd_paper_eval)
-
-    # Dataset pipeline command (one-command solution)
-    dp = sub.add_parser(
-        "dataset-pipeline",
-        help="One-command: join pricefeed + Polymarket + baseline report",
-    )
-    dp.add_argument(
-        "--pricefeed-dir",
-        default="data/pricefeed",
-        help="Pricefeed data directory",
-    )
-    dp.add_argument(
-        "--polymarket-dir",
-        default="data",
-        help="Polymarket data directory",
-    )
-    dp.add_argument(
-        "--aligned-out",
-        default="data/aligned_pricefeed.json",
-        help="Output file for aligned features",
-    )
-    dp.add_argument(
-        "--report-out",
-        default=None,
-        help="Output file for report (optional)",
-    )
-    dp.add_argument(
-        "--tolerance",
-        type=float,
-        default=1.0,
-        help="Alignment tolerance in seconds (default: 1)",
-    )
-    dp.add_argument(
-        "--exit-rule",
-        choices=["mark_at_end", "timebox"],
-        default="mark_at_end",
-        help="Exit rule (default: mark_at_end)",
-    )
-    dp.add_argument(
-        "--timebox-minutes",
-        type=float,
-        default=15.0,
-        help="Time limit for timebox exit in minutes (default: 15)",
-    )
-    dp.add_argument(
-        "--confidence-threshold",
-        type=float,
-        default=0.6,
-        help="Minimum confidence to take a trade (default: 0.6)",
-    )
-    dp.add_argument(
-        "--format",
-        choices=["json", "human"],
-        default="human",
-        help="Output format",
-    )
-    dp.set_defaults(func=cmd_dataset_pipeline)
+    sps = sub.add_parser("sports-stats", help="Show sports arbitrage strategy statistics")
+    sps.add_argument("--bankroll", type=float, default=10000.0, help="Paper trading bankroll")
+    sps.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    sps.set_defaults(func=cmd_sports_stats)
 
     # Orderbook imbalance backtest command
     ib = sub.add_parser(
@@ -785,6 +931,11 @@ def main() -> None:
     ib.set_defaults(func=cmd_imbalance_backtest)
 
     args = p.parse_args()
+
+    # Handle --raw flag for microstructure command
+    if hasattr(args, "raw") and args.raw:
+        args.summary = False
+
     args.func(args)
 
 

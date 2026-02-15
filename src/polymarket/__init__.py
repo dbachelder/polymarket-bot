@@ -4,5 +4,6 @@ __all__ = [
     "clob",
     "config",
     "gamma",
+    "microstructure",
     "trading",
 ]
