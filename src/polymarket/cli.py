@@ -625,15 +625,15 @@ def cmd_cross_market_scan(args: argparse.Namespace) -> None:
                     print(
                         f"  {opp.venue_yes} YES @ {opp.yes_price:.3f} + "
                         f"{opp.venue_no} NO @ {opp.no_price:.3f} | "
-                        f"Gross: {opp.gross_spread*100:.2f}% | "
-                        f"Net: {opp.net_spread*100:.2f}% | "
+                        f"Gross: {opp.gross_spread * 100:.2f}% | "
+                        f"Net: {opp.net_spread * 100:.2f}% | "
                         f"Conf: {opp.confidence:.2f}"
                     )
 
             # Show performance summary
             summary = strategy.get_performance_report()
             if summary["total_trades"] > 0:
-                print(f"\n--- Performance Summary ---")
+                print("\n--- Performance Summary ---")
                 print(f"Total trades:    {summary['total_trades']}")
                 print(f"Open positions:  {summary['open_positions']}")
                 print(f"Realized PnL:    ${summary['total_realized_pnl']:.2f}")
@@ -662,21 +662,61 @@ def cmd_cross_market_report(args: argparse.Namespace) -> None:
         print(f"Total trades:         {summary['total_trades']}")
         print(f"Open positions:       {summary['open_positions']}")
         print(f"Closed positions:     {summary['closed_positions']}")
-        print(f"Win rate:             {summary['win_rate']*100:.1f}%")
+        print(f"Win rate:             {summary['win_rate'] * 100:.1f}%")
         print(f"\nTotal realized PnL:   ${summary['total_realized_pnl']:.2f}")
         print(f"Total theoretical:    ${summary['total_theoretical_pnl']:.2f}")
         print(f"Combined PnL:         ${summary['total_pnl']:.2f}")
         print(f"\nAvg realized PnL:     ${summary['avg_realized_pnl']:.3f}")
-        print(f"Avg spread captured:  {summary['avg_spread_captured']*100:.2f}%")
+        print(f"Avg spread captured:  {summary['avg_spread_captured'] * 100:.2f}%")
 
-        status = summary.get('trades_by_status', {})
+        status = summary.get("trades_by_status", {})
         if status:
-            print(f"\n--- By Status ---")
+            print("\n--- By Status ---")
             print(f"Open:                 {status.get('open', 0)}")
             print(f"Closed early:         {status.get('closed', 0)}")
             print(f"Held to resolution:   {status.get('held_to_resolution', 0)}")
 
         print("=" * 70)
+
+
+def cmd_dataset_join(args: argparse.Namespace) -> None:
+    """Align Polymarket 15m snapshots with Binance BTC features for lead/lag analysis."""
+    from pathlib import Path
+
+    from .dataset_join import build_aligned_dataset, save_report
+
+    pm_dir = Path(args.polymarket_dir)
+    bn_dir = Path(args.binance_dir)
+    out_dir = Path(args.out_dir) if args.out_dir else pm_dir
+
+    report = build_aligned_dataset(
+        polymarket_data_dir=pm_dir,
+        binance_data_dir=bn_dir,
+        hours=args.hours,
+        tolerance_seconds=args.tolerance,
+        horizons=args.horizons,
+    )
+
+    # Generate output filenames
+    from datetime import UTC, datetime
+
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    json_path = out_dir / f"leadlag_{timestamp}.json"
+    text_path = out_dir / f"leadlag_{timestamp}.txt" if args.text else None
+
+    # Save report
+    save_report(report, json_path, text_path)
+
+    # Output
+    if args.format == "json":
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(report.to_text())
+
+        if text_path:
+            print(f"\nReport saved to: {json_path}")
+            if text_path:
+                print(f"Text report saved to: {text_path}")
 
 
 def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
@@ -1103,6 +1143,58 @@ def main() -> None:
     )
     ws.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     ws.set_defaults(func=cmd_weather_scan)
+
+    # Dataset join command for lead/lag analysis
+    dj = sub.add_parser(
+        "dataset-join",
+        help="Align Polymarket 15m snapshots with Binance BTC features for lead/lag analysis",
+    )
+    dj.add_argument(
+        "--polymarket-dir",
+        default="data",
+        help="Polymarket data directory containing 15m snapshots (default: data)",
+    )
+    dj.add_argument(
+        "--binance-dir",
+        default="data/binance",
+        help="Binance data directory (default: data/binance)",
+    )
+    dj.add_argument(
+        "--out-dir",
+        default=None,
+        help="Output directory for reports (default: same as --polymarket-dir)",
+    )
+    dj.add_argument(
+        "--hours",
+        type=float,
+        default=24.0,
+        help="Hours of data to analyze (default: 24)",
+    )
+    dj.add_argument(
+        "--tolerance",
+        type=float,
+        default=5.0,
+        help="Alignment tolerance in seconds (default: 5.0)",
+    )
+    dj.add_argument(
+        "--horizons",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Return horizons in seconds (default: 5 15 30 60 300 900)",
+    )
+    dj.add_argument(
+        "--text",
+        action="store_true",
+        help="Also save human-readable text report",
+    )
+    dj.add_argument(
+        "--format",
+        choices=["json", "human"],
+        default="human",
+        help="Output format (default: human)",
+    )
+    dj.set_defaults(func=cmd_dataset_join)
 
     # Orderbook imbalance backtest command
     ib = sub.add_parser(

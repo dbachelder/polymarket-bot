@@ -1,8 +1,6 @@
-"""Tests for cross-market arbitrage strategy.
-"""
+"""Tests for cross-market arbitrage strategy."""
 
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
 
@@ -11,7 +9,6 @@ from polymarket.cross_market import (
     POLYMARKET_FEE_SCHEDULE,
     ArbitrageOpportunity,
     CrossMarketEvent,
-    FeeSchedule,
     VenueMarket,
 )
 from polymarket.cross_market.calculator import SpreadCalculator, quick_spread_check

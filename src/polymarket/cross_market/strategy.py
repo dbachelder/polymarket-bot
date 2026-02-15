@@ -13,17 +13,16 @@ Exit: Close spread converges OR hold to resolution
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import ArbitrageOpportunity, CrossMarketEvent
+from . import ArbitrageOpportunity
 from .calculator import SpreadCalculator, quick_spread_check
 from .kalshi_client import KalshiClient
-from .matcher import EventMatcher, match_events_by_normalized_title
+from .matcher import EventMatcher
 from .polymarket_client import PolymarketClient
 from .tracker import PaperTradeTracker
 
@@ -31,9 +30,9 @@ logger = logging.getLogger(__name__)
 
 # Strategy configuration
 DEFAULT_MIN_GROSS_SPREAD = 0.01  # 1% minimum gross spread
-DEFAULT_MIN_NET_SPREAD = 0.005   # 0.5% minimum net spread after fees
-DEFAULT_MAX_POSITIONS = 10       # Maximum open positions
-DEFAULT_POSITION_SIZE = 1.0      # Contracts per side
+DEFAULT_MIN_NET_SPREAD = 0.005  # 0.5% minimum net spread after fees
+DEFAULT_MAX_POSITIONS = 10  # Maximum open positions
+DEFAULT_POSITION_SIZE = 1.0  # Contracts per side
 
 
 @dataclass(frozen=True)
@@ -168,7 +167,10 @@ class CrossMarketArbitrage:
 
         for opp in opportunities:
             if open_positions >= self.max_positions:
-                logger.info("Max positions reached (%d), skipping remaining opportunities", self.max_positions)
+                logger.info(
+                    "Max positions reached (%d), skipping remaining opportunities",
+                    self.max_positions,
+                )
                 break
 
             if not dry_run:

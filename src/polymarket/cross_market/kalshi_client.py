@@ -43,9 +43,7 @@ class KalshiClient:
         self.api_key = api_key
         self.api_secret = api_secret
         self.fee_schedule = fee_schedule or KALSHI_FEE_SCHEDULE
-        self._http = httpx.Client(timeout=30.0, headers={
-            "User-Agent": "polymarket-bot/0.1"
-        })
+        self._http = httpx.Client(timeout=30.0, headers={"User-Agent": "polymarket-bot/0.1"})
 
     def _get_auth_headers(self) -> dict[str, str]:
         """Get authentication headers if credentials are available."""
@@ -157,8 +155,9 @@ class KalshiClient:
         # Price is in cents (0-100)
 
         # Check if this is a binary (YES/NO) market
-        yes_subtitle = data.get("yes_sub_title", "")
-        no_subtitle = data.get("no_sub_title", "")
+        # yes_subtitle and no_subtitle indicate binary markets
+        _ = data.get("yes_sub_title", "")
+        _ = data.get("no_sub_title", "")
 
         # Kalshi prices are in cents, convert to 0-1 range
         yes_price = data.get("last_price")
