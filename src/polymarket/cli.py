@@ -21,6 +21,33 @@ from .microstructure import (
 logger = logging.getLogger(__name__)
 
 
+def resolve_snapshot_path(path: Path) -> Path:
+    """Resolve a snapshot path, auto-dereferencing pointer files.
+
+    Pointer files (e.g., data/latest_15m.json) contain {"path": "...", "generated_at": "..."}.
+    If the file is a pointer, return the path it points to. Otherwise return the original path.
+
+    Args:
+        path: Path to snapshot file or pointer file
+
+    Returns:
+        Resolved path to the actual snapshot file
+    """
+    if not path.exists():
+        return path
+
+    try:
+        data = json.loads(path.read_text())
+        if isinstance(data, dict) and "path" in data:
+            resolved = Path(data["path"])
+            if resolved.exists():
+                return resolved
+    except (json.JSONDecodeError, OSError):
+        pass
+
+    return path
+
+
 def _print(obj: object) -> None:
     print(json.dumps(obj, indent=2, sort_keys=True))
 
@@ -163,7 +190,7 @@ def cmd_pnl_verify(args: argparse.Namespace) -> None:
         if books_path.exists():
             orderbooks = load_orderbooks_from_file(books_path)
     elif args.snapshot:
-        snapshot_path = Path(args.snapshot)
+        snapshot_path = resolve_snapshot_path(Path(args.snapshot))
         if snapshot_path.exists():
             orderbooks = load_orderbooks_from_snapshot(snapshot_path)
     elif args.data_dir:
@@ -269,7 +296,7 @@ def cmd_pnl_verify(args: argparse.Namespace) -> None:
 
 def cmd_microstructure(args: argparse.Namespace) -> None:
     """Analyze microstructure for markets in a snapshot."""
-    snapshot_path = Path(args.snapshot)
+    snapshot_path = resolve_snapshot_path(Path(args.snapshot))
     if not snapshot_path.exists():
         print(
             json.dumps({"error": f"Snapshot file not found: {args.snapshot}"}),
@@ -973,7 +1000,10 @@ def main() -> None:
     pnl.add_argument(
         "--snapshot",
         default=None,
-        help="Path to collector snapshot for orderbook data",
+        help=(
+            "Path to collector snapshot for orderbook data. "
+            "Supports pointer files like data/latest_15m.json"
+        ),
     )
     pnl.add_argument(
         "--since",
@@ -1010,7 +1040,14 @@ def main() -> None:
     pnl.set_defaults(func=cmd_pnl_verify)
 
     ms = sub.add_parser("microstructure", help="Analyze market microstructure from snapshot")
-    ms.add_argument("--snapshot", required=True, help="Path to snapshot JSON file")
+    ms.add_argument(
+        "--snapshot",
+        required=True,
+        help=(
+            "Path to snapshot JSON file. "
+            "Supports pointer files like data/latest_15m.json"
+        ),
+    )
     ms.add_argument("--target", type=str, default="bitcoin", help="Target market substring filter")
     ms.add_argument(
         "--summary",

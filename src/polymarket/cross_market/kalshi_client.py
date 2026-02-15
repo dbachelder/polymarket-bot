@@ -156,10 +156,6 @@ class KalshiClient:
         # The market itself represents the YES contract
         # Price is in cents (0-100)
 
-        # Check if this is a binary (YES/NO) market
-        yes_subtitle = data.get("yes_sub_title", "")
-        no_subtitle = data.get("no_sub_title", "")
-
         # Kalshi prices are in cents, convert to 0-1 range
         yes_price = data.get("last_price")
         if yes_price is not None:

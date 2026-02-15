@@ -58,6 +58,26 @@ The project provides a `./run.sh` script for all common operations. This ensures
 ./run.sh health-check --data-dir data
 ```
 
+### Pointer File Support
+
+Commands that accept `--snapshot` (like `microstructure` and `pnl-verify`) support pointer files for convenience. Pointer files are JSON files containing `{"path": "...", "generated_at": "..."}` that point to actual snapshot files.
+
+The collector automatically creates `data/latest_15m.json` as a pointer to the most recent snapshot:
+
+```bash
+# These are equivalent:
+./run.sh microstructure --snapshot data/latest_15m.json
+./run.sh microstructure --snapshot data/snapshot_15m_20250215T120000Z.json
+
+# PnL verification also supports pointer files:
+./run.sh pnl-verify --data-dir data --snapshot data/latest_15m.json
+```
+
+This is useful for:
+- Scripts that always want the latest snapshot without parsing filenames
+- Cron jobs that run analysis on the most recent data
+- Avoiding race conditions when snapshots are being rotated
+
 ### Cron Usage
 
 When running from cron, use the full path to the polymarket-bot venv:
