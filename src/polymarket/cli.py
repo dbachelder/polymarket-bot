@@ -266,6 +266,210 @@ def cmd_hourly_digest(args: argparse.Namespace) -> None:
         print("\n" + "=" * 60)
 
 
+def cmd_health_check(args: argparse.Namespace) -> None:
+    """Check collector health and staleness SLA."""
+    from pathlib import Path
+
+    from .collector_loop import check_staleness_sla
+
+    out_dir = Path(args.data_dir)
+    result = check_staleness_sla(
+        out_dir=out_dir,
+        max_age_seconds=float(args.max_age_seconds),
+        prefix=args.prefix,
+    )
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        status = "✓ HEALTHY" if result["healthy"] else "✗ UNHEALTHY"
+        print(f"{status}: {result['message']}")
+        if result["age_seconds"] is not None:
+            print(f"  Age: {result['age_seconds']:.1f}s (max: {result['max_age_seconds']:.1f}s)")
+
+    # Exit with error code if unhealthy and --fail is set
+    if args.fail and not result["healthy"]:
+        raise SystemExit(1)
+
+
+def cmd_pricefeed_loop(args: argparse.Namespace) -> None:
+    """Run pricefeed WebSocket collector loop (Coinbase/Kraken)."""
+    from pathlib import Path
+
+    from .pricefeed import run_collector_loop
+
+    run_collector_loop(
+        out_dir=Path(args.out),
+        venue=args.venue,
+        snapshot_interval_seconds=float(args.snapshot_interval_seconds),
+        max_reconnect_delay=float(args.max_reconnect_delay),
+        retention_hours=args.retention_hours,
+    )
+
+
+def cmd_pricefeed_collect(args: argparse.Namespace) -> None:
+    """Collect pricefeed snapshot via REST API (Coinbase/Kraken)."""
+    from pathlib import Path
+
+    from .pricefeed import collect_snapshot_rest
+
+    out_path = collect_snapshot_rest(
+        out_dir=Path(args.out),
+        venue=args.venue,
+    )
+    print(str(out_path))
+
+
+def cmd_dataset_join(args: argparse.Namespace) -> None:
+    """Align pricefeed features to Polymarket snapshots."""
+    from pathlib import Path
+
+    from .pricefeed_features import (
+        align_to_polymarket_snapshots,
+        save_aligned_features,
+    )
+
+    pricefeed_dir = Path(args.pricefeed_dir)
+    polymarket_dir = Path(args.polymarket_dir)
+    out_path = Path(args.out)
+
+    aligned = align_to_polymarket_snapshots(
+        pricefeed_data_dir=pricefeed_dir,
+        polymarket_data_dir=polymarket_dir,
+        tolerance_seconds=float(args.tolerance),
+    )
+
+    save_aligned_features(aligned, out_path)
+    print(f"Aligned {len(aligned)} records to {out_path}")
+
+
+def cmd_paper_eval(args: argparse.Namespace) -> None:
+    """Run paper PnL evaluation on aligned dataset."""
+    from pathlib import Path
+
+    from .paper_pnl import run_paper_evaluation
+
+    aligned_file = Path(args.input)
+    out_file = Path(args.out) if args.out else None
+
+    run_paper_evaluation(
+        aligned_file=aligned_file,
+        out_file=out_file,
+        exit_rule=args.exit_rule,
+        timebox_minutes=args.timebox_minutes,
+        confidence_threshold=args.confidence_threshold,
+        format=args.format,
+    )
+
+
+def cmd_dataset_pipeline(args: argparse.Namespace) -> None:
+    """One-command pipeline: join pricefeed to PM snapshots + generate baseline report."""
+    from pathlib import Path
+
+    from .paper_pnl import run_paper_evaluation
+    from .pricefeed_features import (
+        align_to_polymarket_snapshots,
+        save_aligned_features,
+    )
+
+    pricefeed_dir = Path(args.pricefeed_dir)
+    polymarket_dir = Path(args.polymarket_dir)
+    aligned_out = Path(args.aligned_out)
+    report_out = Path(args.report_out) if args.report_out else None
+
+    # Step 1: Align datasets
+    print("Aligning pricefeed to Polymarket snapshots...")
+    aligned = align_to_polymarket_snapshots(
+        pricefeed_data_dir=pricefeed_dir,
+        polymarket_data_dir=polymarket_dir,
+        tolerance_seconds=float(args.tolerance),
+    )
+    save_aligned_features(aligned, aligned_out)
+    print(f"  Aligned {len(aligned)} records to {aligned_out}")
+
+    # Step 2: Run paper evaluation
+    print("Running paper PnL evaluation...")
+    run_paper_evaluation(
+        aligned_file=aligned_out,
+        out_file=report_out,
+        exit_rule=args.exit_rule,
+        timebox_minutes=args.timebox_minutes,
+        confidence_threshold=args.confidence_threshold,
+        format=args.format,
+    )
+
+
+def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
+    """Run orderbook imbalance strategy backtest."""
+    from pathlib import Path
+
+    from .strategy_imbalance import (
+        load_snapshots_for_backtest,
+        parameter_sweep,
+        run_backtest,
+    )
+
+    data_dir = Path(args.data_dir)
+
+    if args.sweep:
+        results = parameter_sweep(
+            data_dir=data_dir,
+            interval=args.interval,
+            target=args.target,
+        )
+        output = {
+            "results": [r.to_dict() for r in results],
+            "best": max(results, key=lambda x: x.sharpe_ratio).to_dict() if results else None,
+        }
+    else:
+        result = run_backtest(
+            data_dir=data_dir,
+            interval=args.interval,
+            k=args.k,
+            theta=args.theta,
+            p_max=args.p_max,
+            target=args.target,
+        )
+        output = result.to_dict()
+
+    if args.format == "json":
+        print(json.dumps(output, indent=2))
+    else:
+        if args.sweep:
+            print("=" * 60)
+            print("PARAMETER SWEEP RESULTS")
+            print("=" * 60)
+            sorted_results = sorted(output["results"], key=lambda x: x["sharpe_ratio"], reverse=True)
+            print(f"\nTop 5 by Sharpe ratio:")
+            for i, r in enumerate(sorted_results[:5], 1):
+                print(f"  {i}. k={r['k']}, θ={r['theta']:.2f}, p_max={r['p_max']:.2f}")
+                print(f"     Sharpe: {r['sharpe_ratio']:.3f} | PnL: ${r['total_pnl']:.2f} | Trades: {r['total_trades']}")
+            if output["best"]:
+                best = output["best"]
+                print(f"\nBest: k={best['k']}, θ={best['theta']:.2f}, p_max={best['p_max']:.2f}")
+                print(f"      Sharpe: {best['sharpe_ratio']:.3f}")
+        else:
+            print("=" * 60)
+            print("BACKTEST RESULTS")
+            print("=" * 60)
+            r = output
+            print(f"\nParameters: k={r['k']}, θ={r['theta']:.2f}, p_max={r['p_max']:.2f}")
+            print(f"Total PnL: ${r['total_pnl']:.2f}")
+            print(f"Sharpe Ratio: {r['sharpe_ratio']:.3f}")
+            print(f"Total Trades: {r['total_trades']}")
+            print(f"Win Rate: {r['win_rate_pct']:.1f}%")
+            print(f"Avg Trade: ${r['avg_trade_pnl']:.2f}")
+            print(f"Max Drawdown: {r['max_drawdown_pct']:.2f}%")
+            print(f"Profit Factor: {r['profit_factor']:.2f}")
+            print("\n--- Trades ---")
+            for t in r['trades'][:10]:  # Show first 10
+                pnl_str = f"${t['pnl']:+.2f}"
+                print(f"  {t['timestamp']} | {t['direction']:>4} @ {t['entry_price']:.3f} → {t['exit_price']:.3f} | {pnl_str}")
+            if len(r['trades']) > 10:
+                print(f"  ... and {len(r['trades']) - 10} more trades")
+        print("\n" + "=" * 60)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="polymarket")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -343,12 +547,242 @@ def main() -> None:
     bf.add_argument("--tolerance", type=float, default=2.0)
     bf.set_defaults(func=cmd_binance_features)
 
-    # Hourly digest
+    # Hourly digest (from base branch)
     hd = sub.add_parser("hourly-digest", help="Generate hourly digest report")
     hd.add_argument("--data-dir", default="data/15m")
     hd.add_argument("--interval-seconds", type=float, default=5.0)
     hd.add_argument("--format", choices=["json", "human"], default="human")
     hd.set_defaults(func=cmd_hourly_digest)
+
+    # Health check (from pricefeed branch)
+    hc = sub.add_parser("health-check", help="Check collector health and staleness SLA")
+    hc.add_argument("--data-dir", default="data", help="Data directory containing snapshots")
+    hc.add_argument(
+        "--max-age-seconds",
+        type=float,
+        default=120.0,
+        help="Max acceptable snapshot age (default: 120s)",
+    )
+    hc.add_argument("--prefix", default="snapshot_15m", help="Snapshot file prefix")
+    hc.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    hc.add_argument("--fail", action="store_true", help="Exit with error code if unhealthy")
+    hc.set_defaults(func=cmd_health_check)
+
+    # Pricefeed commands (from pricefeed branch)
+    pfl = sub.add_parser(
+        "pricefeed-loop",
+        help="Continuously collect pricefeed data via WebSocket (Coinbase/Kraken)",
+    )
+    pfl.add_argument("--out", default="data/pricefeed", help="Output directory")
+    pfl.add_argument(
+        "--venue",
+        choices=["coinbase", "kraken"],
+        default="coinbase",
+        help="Pricefeed venue (default: coinbase)",
+    )
+    pfl.add_argument(
+        "--snapshot-interval-seconds",
+        type=float,
+        default=1.0,
+        help="Snapshot interval in seconds (default: 1)",
+    )
+    pfl.add_argument(
+        "--max-reconnect-delay",
+        type=float,
+        default=60.0,
+        help="Max reconnection delay in seconds (default: 60)",
+    )
+    pfl.add_argument(
+        "--retention-hours",
+        type=float,
+        default=None,
+        help="Prune snapshots older than N hours",
+    )
+    pfl.set_defaults(func=cmd_pricefeed_loop)
+
+    pfc = sub.add_parser(
+        "pricefeed-collect",
+        help="Collect pricefeed snapshot via REST API (single shot)",
+    )
+    pfc.add_argument("--out", default="data/pricefeed", help="Output directory")
+    pfc.add_argument(
+        "--venue",
+        choices=["coinbase", "kraken"],
+        default="coinbase",
+        help="Pricefeed venue (default: coinbase)",
+    )
+    pfc.set_defaults(func=cmd_pricefeed_collect)
+
+    # Dataset join command (pricefeed + polymarket)
+    dj = sub.add_parser(
+        "dataset-join",
+        help="Align pricefeed features to Polymarket snapshots",
+    )
+    dj.add_argument(
+        "--pricefeed-dir",
+        default="data/pricefeed",
+        help="Pricefeed data directory",
+    )
+    dj.add_argument(
+        "--polymarket-dir",
+        default="data",
+        help="Polymarket data directory",
+    )
+    dj.add_argument(
+        "--out",
+        default="data/aligned_pricefeed.json",
+        help="Output file for aligned features",
+    )
+    dj.add_argument(
+        "--tolerance",
+        type=float,
+        default=1.0,
+        help="Alignment tolerance in seconds (default: 1)",
+    )
+    dj.set_defaults(func=cmd_dataset_join)
+
+    # Paper PnL evaluation command
+    pe = sub.add_parser(
+        "paper-eval",
+        help="Run paper PnL evaluation on aligned dataset",
+    )
+    pe.add_argument(
+        "--input",
+        default="data/aligned_pricefeed.json",
+        help="Aligned dataset file",
+    )
+    pe.add_argument(
+        "--out",
+        default=None,
+        help="Output file for report (optional)",
+    )
+    pe.add_argument(
+        "--exit-rule",
+        choices=["mark_at_end", "timebox"],
+        default="mark_at_end",
+        help="Exit rule (default: mark_at_end)",
+    )
+    pe.add_argument(
+        "--timebox-minutes",
+        type=float,
+        default=15.0,
+        help="Time limit for timebox exit in minutes (default: 15)",
+    )
+    pe.add_argument(
+        "--confidence-threshold",
+        type=float,
+        default=0.6,
+        help="Minimum confidence to take a trade (default: 0.6)",
+    )
+    pe.add_argument(
+        "--format",
+        choices=["json", "human"],
+        default="human",
+        help="Output format",
+    )
+    pe.set_defaults(func=cmd_paper_eval)
+
+    # Dataset pipeline command (one-command solution)
+    dp = sub.add_parser(
+        "dataset-pipeline",
+        help="One-command: join pricefeed + Polymarket + baseline report",
+    )
+    dp.add_argument(
+        "--pricefeed-dir",
+        default="data/pricefeed",
+        help="Pricefeed data directory",
+    )
+    dp.add_argument(
+        "--polymarket-dir",
+        default="data",
+        help="Polymarket data directory",
+    )
+    dp.add_argument(
+        "--aligned-out",
+        default="data/aligned_pricefeed.json",
+        help="Output file for aligned features",
+    )
+    dp.add_argument(
+        "--report-out",
+        default=None,
+        help="Output file for report (optional)",
+    )
+    dp.add_argument(
+        "--tolerance",
+        type=float,
+        default=1.0,
+        help="Alignment tolerance in seconds (default: 1)",
+    )
+    dp.add_argument(
+        "--exit-rule",
+        choices=["mark_at_end", "timebox"],
+        default="mark_at_end",
+        help="Exit rule (default: mark_at_end)",
+    )
+    dp.add_argument(
+        "--timebox-minutes",
+        type=float,
+        default=15.0,
+        help="Time limit for timebox exit in minutes (default: 15)",
+    )
+    dp.add_argument(
+        "--confidence-threshold",
+        type=float,
+        default=0.6,
+        help="Minimum confidence to take a trade (default: 0.6)",
+    )
+    dp.add_argument(
+        "--format",
+        choices=["json", "human"],
+        default="human",
+        help="Output format",
+    )
+    dp.set_defaults(func=cmd_dataset_pipeline)
+
+    # Orderbook imbalance backtest command
+    ib = sub.add_parser(
+        "imbalance-backtest",
+        help="Backtest orderbook imbalance strategy on BTC interval markets",
+    )
+    ib.add_argument("--data-dir", default="data", help="Data directory containing snapshots")
+    ib.add_argument(
+        "--interval",
+        choices=["5m", "15m"],
+        default="15m",
+        help="Market interval to analyze (default: 15m)",
+    )
+    ib.add_argument(
+        "--k",
+        type=int,
+        default=3,
+        choices=[1, 3, 5],
+        help="Depth levels for imbalance calculation (default: 3)",
+    )
+    ib.add_argument(
+        "--theta",
+        type=float,
+        default=0.70,
+        help="Imbalance threshold 0.5-1.0 (default: 0.70)",
+    )
+    ib.add_argument(
+        "--p-max",
+        type=float,
+        default=0.65,
+        help="Max price to pay for position 0.5-1.0 (default: 0.65)",
+    )
+    ib.add_argument(
+        "--target",
+        type=str,
+        default="bitcoin",
+        help="Target market substring filter (default: bitcoin)",
+    )
+    ib.add_argument(
+        "--sweep",
+        action="store_true",
+        help="Run parameter sweep across k/theta/p_max combinations",
+    )
+    ib.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    ib.set_defaults(func=cmd_imbalance_backtest)
 
     args = p.parse_args()
     args.func(args)
