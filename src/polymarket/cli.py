@@ -352,10 +352,12 @@ def cmd_binance_collect(args: argparse.Namespace) -> None:
     from .binance_collector import collect_snapshot_rest
 
     out_dir = Path(args.out)
+    base_urls = args.base_url if args.base_url else None
     out_path = collect_snapshot_rest(
         out_dir=out_dir,
         symbol=args.symbol,
         kline_intervals=args.intervals,
+        base_urls=base_urls,
     )
     print(str(out_path))
 
@@ -366,6 +368,7 @@ def cmd_binance_loop(args: argparse.Namespace) -> None:
 
     from .binance_collector import run_collector_loop
 
+    ws_bases = args.ws_base if args.ws_base else None
     run_collector_loop(
         out_dir=Path(args.out),
         symbol=args.symbol,
@@ -373,6 +376,7 @@ def cmd_binance_loop(args: argparse.Namespace) -> None:
         snapshot_interval_seconds=float(args.snapshot_interval_seconds),
         max_reconnect_delay=float(args.max_reconnect_delay),
         retention_hours=args.retention_hours,
+        ws_bases=ws_bases,
     )
 
 
@@ -822,6 +826,12 @@ def main() -> None:
     bc.add_argument("--out", default="data/binance", help="Output directory")
     bc.add_argument("--symbol", default="BTCUSDT", help="Trading pair symbol (default: BTCUSDT)")
     bc.add_argument("--intervals", nargs="+", default=["1m", "5m"], help="Kline intervals to fetch")
+    bc.add_argument(
+        "--base-url",
+        nargs="+",
+        default=None,
+        help="Override base URL(s) for Binance API (default: auto-failover list)",
+    )
     bc.set_defaults(func=cmd_binance_collect)
 
     bcl = sub.add_parser("binance-loop", help="Continuously collect Binance data via WebSocket")
@@ -837,6 +847,12 @@ def main() -> None:
         "--max-reconnect-delay", type=float, default=60.0, help="Max reconnection delay"
     )
     bcl.add_argument("--retention-hours", type=float, default=None, help="Prune old files")
+    bcl.add_argument(
+        "--ws-base",
+        nargs="+",
+        default=None,
+        help="Override WebSocket base URL(s) (default: auto-failover list)",
+    )
     bcl.set_defaults(func=cmd_binance_loop)
 
     bf = sub.add_parser("binance-align", help="Align Binance features to Polymarket snapshots")
