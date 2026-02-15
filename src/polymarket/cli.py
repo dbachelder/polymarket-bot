@@ -139,17 +139,13 @@ def cmd_pnl_verify(args: argparse.Namespace) -> None:
             fills = load_fills_from_file(fills_jsonl_path)
         else:
             print(
-                json.dumps(
-                    {"error": f"No fills.json or fills.jsonl found in {args.data_dir}"}
-                ),
+                json.dumps({"error": f"No fills.json or fills.jsonl found in {args.data_dir}"}),
                 file=__import__("sys").stderr,
             )
             raise SystemExit(1)
     else:
         print(
-            json.dumps(
-                {"error": "Must specify --input or --data-dir"}
-            ),
+            json.dumps({"error": "Must specify --input or --data-dir"}),
             file=__import__("sys").stderr,
         )
         raise SystemExit(1)
@@ -494,7 +490,9 @@ def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
             print("=" * 80)
             print(f"Snapshots analyzed: {len(snapshots)}")
             print(f"Target market: {args.target}")
-            print(f"\n{'Rank':<6}{'k':<4}{'theta':<8}{'p_max':<8}{'Trades':<8}{'UP':<6}{'DOWN':<8}{'Avg Conf':<10}")
+            print(
+                f"\n{'Rank':<6}{'k':<4}{'theta':<8}{'p_max':<8}{'Trades':<8}{'UP':<6}{'DOWN':<8}{'Avg Conf':<10}"
+            )
             print("-" * 80)
 
             for i, result in enumerate(results[:10], 1):  # Top 10
@@ -784,7 +782,9 @@ def main() -> None:
         "--polymarket-dir", default="data", help="Polymarket data directory (default: data)"
     )
     dj.add_argument(
-        "--binance-dir", default="data/binance", help="Binance data directory (default: data/binance)"
+        "--binance-dir",
+        default="data/binance",
+        help="Binance data directory (default: data/binance)",
     )
     dj.add_argument(
         "--hours", type=float, default=24.0, help="Hours of data to analyze (default: 24)"
@@ -793,11 +793,11 @@ def main() -> None:
         "--tolerance", type=float, default=5.0, help="Alignment tolerance in seconds (default: 5)"
     )
     dj.add_argument(
-        "--out", default="data/join_report.json", help="Output JSON file (default: data/join_report.json)"
+        "--out",
+        default="data/join_report.json",
+        help="Output JSON file (default: data/join_report.json)",
     )
-    dj.add_argument(
-        "--text", action="store_true", help="Also save human-readable text report"
-    )
+    dj.add_argument("--text", action="store_true", help="Also save human-readable text report")
     dj.add_argument(
         "--format", choices=["json", "human"], default="human", help="Console output format"
     )

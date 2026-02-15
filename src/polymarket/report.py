@@ -143,7 +143,11 @@ def analyze_collector_health(
 
     # Expected snapshots in an hour at given interval
     expected_snapshots = int(3600 / interval_seconds)
-    capture_rate_pct = min(100.0, (snapshots_last_hour / expected_snapshots) * 100) if expected_snapshots > 0 else 0.0
+    capture_rate_pct = (
+        min(100.0, (snapshots_last_hour / expected_snapshots) * 100)
+        if expected_snapshots > 0
+        else 0.0
+    )
 
     return CollectorHealth(
         latest_snapshot_at=latest_ts.isoformat() if latest_ts else None,

@@ -429,10 +429,12 @@ def parameter_sweep(
                     target_market_substring=target_market_substring,
                 )
 
-                results.append({
-                    "params": {"k": k, "theta": theta, "p_max": p_max},
-                    "metrics": result.metrics,
-                })
+                results.append(
+                    {
+                        "params": {"k": k, "theta": theta, "p_max": p_max},
+                        "metrics": result.metrics,
+                    }
+                )
 
     # Sort by trade count descending
     results.sort(key=lambda x: x["metrics"]["total_trades"], reverse=True)

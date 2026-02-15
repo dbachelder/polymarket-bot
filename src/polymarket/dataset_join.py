@@ -230,12 +230,14 @@ class JoinReport:
             for title in set(self.sanity_metrics.btc_market_titles):
                 lines.append(f"  - {title}")
 
-        lines.extend([
-            "",
-            "--- Lead/Lag Correlations ---",
-            f"{'Horizon':<10} {'BTC Lead':<12} {'PM Lead':<12} {'Samples':<10}",
-            "-" * 50,
-        ])
+        lines.extend(
+            [
+                "",
+                "--- Lead/Lag Correlations ---",
+                f"{'Horizon':<10} {'BTC Lead':<12} {'PM Lead':<12} {'Samples':<10}",
+                "-" * 50,
+            ]
+        )
 
         for corr in self.correlation_results:
             lead_str = f"{corr.btc_lead_corr:.3f}" if corr.btc_lead_corr is not None else "N/A"
@@ -244,15 +246,17 @@ class JoinReport:
                 f"{corr._format_horizon():<10} {lead_str:<12} {lag_str:<12} {corr.sample_size:<10}"
             )
 
-        lines.extend([
-            "",
-            "Interpretation:",
-            "  BTC Lead: Correlation of BTC returns leading PM prob changes",
-            "  PM Lead:  Correlation of BTC returns lagging PM prob changes",
-            "  Positive = BTC up -> PM prob up (or BTC down -> PM prob down)",
-            "",
-            "=" * 70,
-        ])
+        lines.extend(
+            [
+                "",
+                "Interpretation:",
+                "  BTC Lead: Correlation of BTC returns leading PM prob changes",
+                "  PM Lead:  Correlation of BTC returns lagging PM prob changes",
+                "  Positive = BTC up -> PM prob up (or BTC down -> PM prob down)",
+                "",
+                "=" * 70,
+            ]
+        )
 
         return "\n".join(lines)
 
@@ -309,20 +313,19 @@ def compute_lead_lag_correlations(
         if len(btc_rets) != len(pm_chgs):
             continue
 
-        valid_pairs = [
-            (b, p) for b, p in zip(btc_rets, pm_chgs)
-            if b is not None and p is not None
-        ]
+        valid_pairs = [(b, p) for b, p in zip(btc_rets, pm_chgs) if b is not None and p is not None]
 
         if len(valid_pairs) < 10:
-            results.append(LeadLagCorrelation(
-                horizon_seconds=h,
-                btc_lead_corr=None,
-                btc_lag_corr=None,
-                btc_lead_pvalue=None,
-                btc_lag_pvalue=None,
-                sample_size=len(valid_pairs),
-            ))
+            results.append(
+                LeadLagCorrelation(
+                    horizon_seconds=h,
+                    btc_lead_corr=None,
+                    btc_lag_corr=None,
+                    btc_lead_pvalue=None,
+                    btc_lag_pvalue=None,
+                    sample_size=len(valid_pairs),
+                )
+            )
             continue
 
         btc_arr = np.array([p[0] for p in valid_pairs])
@@ -337,23 +340,27 @@ def compute_lead_lag_correlations(
             else:
                 btc_lead_corr = btc_lag_corr = None
 
-            results.append(LeadLagCorrelation(
-                horizon_seconds=h,
-                btc_lead_corr=btc_lead_corr,
-                btc_lag_corr=btc_lag_corr,
-                btc_lead_pvalue=None,
-                btc_lag_pvalue=None,
-                sample_size=len(valid_pairs),
-            ))
+            results.append(
+                LeadLagCorrelation(
+                    horizon_seconds=h,
+                    btc_lead_corr=btc_lead_corr,
+                    btc_lag_corr=btc_lag_corr,
+                    btc_lead_pvalue=None,
+                    btc_lag_pvalue=None,
+                    sample_size=len(valid_pairs),
+                )
+            )
         except Exception:
-            results.append(LeadLagCorrelation(
-                horizon_seconds=h,
-                btc_lead_corr=None,
-                btc_lag_corr=None,
-                btc_lead_pvalue=None,
-                btc_lag_pvalue=None,
-                sample_size=len(valid_pairs),
-            ))
+            results.append(
+                LeadLagCorrelation(
+                    horizon_seconds=h,
+                    btc_lead_corr=None,
+                    btc_lag_corr=None,
+                    btc_lead_pvalue=None,
+                    btc_lag_pvalue=None,
+                    sample_size=len(valid_pairs),
+                )
+            )
 
     return results
 
@@ -372,13 +379,10 @@ def build_aligned_dataset(
     bn_snapshots = _load_binance_snapshots(binance_data_dir, hours)
 
     logger.info(
-        "Loaded %d Polymarket and %d Binance snapshots",
-        len(pm_snapshots), len(bn_snapshots)
+        "Loaded %d Polymarket and %d Binance snapshots", len(pm_snapshots), len(bn_snapshots)
     )
 
-    pm_with_btc = sum(
-        1 for s in pm_snapshots if _extract_btc_market_probabilities(s) is not None
-    )
+    pm_with_btc = sum(1 for s in pm_snapshots if _extract_btc_market_probabilities(s) is not None)
 
     aligned = _align_snapshots(pm_snapshots, bn_snapshots, tolerance_seconds)
 
@@ -447,9 +451,7 @@ def build_aligned_dataset(
     correlations = compute_lead_lag_correlations(bn_returns, pm_changes, horizons)
 
     total_points = len(pm_timestamps) * len(horizons)
-    missing_points = sum(
-        1 for h in horizons for r in bn_returns[h] if r is None
-    )
+    missing_points = sum(1 for h in horizons for r in bn_returns[h] if r is None)
     missingness_pct = (missing_points / total_points * 100) if total_points > 0 else 0.0
 
     sanity = SanityMetrics(
