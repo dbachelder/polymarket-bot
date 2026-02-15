@@ -1175,6 +1175,7 @@ def cmd_paper_backtest(args: argparse.Namespace) -> None:
 
         print("=" * 70)
 
+
 def cmd_dataset_join(args: argparse.Namespace) -> None:
     """Align Polymarket 15m snapshots with Binance BTC features for lead/lag analysis."""
     from pathlib import Path
@@ -1245,31 +1246,50 @@ def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
         results = parameter_sweep(
             snapshots=snapshots,
             target_market_substring=args.target,
+            horizon=args.horizon,
+            fee_bps=args.fee_bps,
+            slippage_bps=args.slippage_bps,
         )
 
         if args.format == "json":
-            print(json.dumps({"results": results}, indent=2))
+            output = {
+                "config": {
+                    "horizon": args.horizon,
+                    "fee_bps": args.fee_bps,
+                    "slippage_bps": args.slippage_bps,
+                    "snapshots": len(snapshots),
+                },
+                "results": results,
+            }
+            print(json.dumps(output, indent=2))
         else:
-            print("=" * 80)
+            print("=" * 100)
             print("ORDERBOOK IMBALANCE STRATEGY - PARAMETER SWEEP")
-            print("=" * 80)
+            print("=" * 100)
             print(f"Snapshots analyzed: {len(snapshots)}")
             print(f"Target market: {args.target}")
+            print(f"Horizon: {args.horizon} snapshot(s) ahead")
+            print(f"Fee: {args.fee_bps} bps | Slippage: {args.slippage_bps} bps")
             print(
-                f"\n{'Rank':<6}{'k':<4}{'theta':<8}{'p_max':<8}{'Trades':<8}{'UP':<6}{'DOWN':<8}{'Avg Conf':<10}"
+                f"\n{'Rank':<6}{'k':<4}{'theta':<8}{'p_max':<8}{'Trades':<8}{'Hit%':<8}{'Win%':<8}{'Total PnL':<12}{'EV/Trade':<10}{'Brier':<8}"
             )
-            print("-" * 80)
+            print("-" * 100)
 
-            for i, result in enumerate(results[:10], 1):  # Top 10
+            for i, result in enumerate(results[:15], 1):  # Top 15
                 p = result["params"]
                 m = result["metrics"]
+                hit_pct = m.get("hit_rate", 0) * 100
+                win_pct = m.get("win_rate", 0) * 100
+                total_pnl = m.get("total_pnl", 0)
+                ev = m.get("ev_per_trade", 0)
+                brier = m.get("avg_brier_score", 0)
                 print(
                     f"{i:<6}{p['k']:<4}{p['theta']:<8.2f}{p['p_max']:<8.2f}"
-                    f"{m['total_trades']:<8}{m['up_trades']:<6}{m['down_trades']:<8}"
-                    f"{m['avg_confidence']:<10.3f}"
+                    f"{m['total_trades']:<8}{hit_pct:<8.1f}{win_pct:<8.1f}"
+                    f"{total_pnl:<12.4f}{ev:<10.4f}{brier:<8.4f}"
                 )
 
-            print("=" * 80)
+            print("=" * 100)
 
     else:
         # Single backtest run
@@ -1279,35 +1299,72 @@ def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
             theta=args.theta,
             p_max=args.p_max,
             target_market_substring=args.target,
+            horizon=args.horizon,
+            fee_bps=args.fee_bps,
+            slippage_bps=args.slippage_bps,
         )
 
         if args.format == "json":
-            print(json.dumps(result.to_dict(), indent=2))
+            print(json.dumps(result.to_dict(include_trades=args.include_trades), indent=2))
         else:
             print("=" * 80)
             print("ORDERBOOK IMBALANCE STRATEGY - BACKTEST RESULTS")
             print("=" * 80)
             print(f"Snapshots analyzed: {len(snapshots)}")
             print(f"Target market: {args.target}")
+            print(f"Horizon: {args.horizon} snapshot(s) ahead")
             print("\nParameters:")
             print(f"  k (depth levels):     {args.k}")
             print(f"  theta (threshold):    {args.theta:.2f}")
             print(f"  p_max (max price):    {args.p_max:.2f}")
+            print(f"  fee_bps:              {args.fee_bps}")
+            print(f"  slippage_bps:         {args.slippage_bps}")
 
-            print("\n--- Results ---")
-            print(f"Total trades:     {result.metrics['total_trades']}")
-            print(f"UP trades:        {result.metrics['up_trades']}")
-            print(f"DOWN trades:      {result.metrics['down_trades']}")
-            print(f"Avg confidence:   {result.metrics['avg_confidence']:.3f}")
-            print(f"Avg entry price:  {result.metrics['avg_entry_price']:.3f}")
+            print("\n--- Trade Summary ---")
+            print(f"Total trades:         {result.metrics['total_trades']}")
+            print(f"UP trades:            {result.metrics['up_trades']}")
+            print(f"DOWN trades:          {result.metrics['down_trades']}")
+            print(f"Trades with outcome:  {result.metrics.get('trades_with_outcome', 0)}")
 
-            if result.trades:
+            print("\n--- Accuracy Metrics ---")
+            hit_rate = result.metrics.get("hit_rate", 0)
+            up_hit = result.metrics.get("up_hit_rate", 0)
+            down_hit = result.metrics.get("down_hit_rate", 0)
+            print(f"Hit rate (direction): {hit_rate:.1%}")
+            print(f"  UP predictions:     {up_hit:.1%}")
+            print(f"  DOWN predictions:   {down_hit:.1%}")
+
+            print("\n--- Calibration Metrics ---")
+            brier = result.metrics.get("avg_brier_score", 0)
+            logloss = result.metrics.get("avg_log_loss", 0)
+            print(f"Avg Brier score:      {brier:.4f} (lower=better, 0=perfect)")
+            print(f"Avg log loss:         {logloss:.4f} (lower=better)")
+
+            print("\n--- PnL Metrics ---")
+            total_pnl = result.metrics.get("total_pnl", 0)
+            win_rate = result.metrics.get("win_rate", 0)
+            ev = result.metrics.get("ev_per_trade", 0)
+            sharpe = result.metrics.get("sharpe_ratio", 0)
+            print(f"Total PnL:            {total_pnl:+.4f}")
+            print(f"Win rate (PnL>0):     {win_rate:.1%}")
+            print(f"EV per trade:         {ev:+.4f}")
+            print(f"Sharpe ratio:         {sharpe:.3f}")
+
+            if result.trades and args.show_trades:
                 print("\n--- Recent Trades (last 10) ---")
                 for t in result.trades[-10:]:
+                    outcome_str = ""
+                    if t.outcome_up is not None:
+                        correct = (t.decision == "UP" and t.outcome_up) or (
+                            t.decision == "DOWN" and not t.outcome_up
+                        )
+                        outcome_str = f" | outcome={'UP' if t.outcome_up else 'DOWN'} {'✓' if correct else '✗'}"
+                    pnl_str = f" | pnl={t.pnl:+.4f}" if t.pnl is not None else ""
                     print(
                         f"  {t.timestamp.strftime('%H:%M')} | {t.decision:<6} | "
                         f"imb={t.imbalance_value:.3f} | mid={t.mid_yes:.3f} | "
                         f"entry={t.entry_price:.3f} | conf={t.confidence:.2f}"
+                        f"{outcome_str}{pnl_str}"
                     )
 
             print("=" * 80)
@@ -1514,10 +1571,7 @@ def main() -> None:
     ms.add_argument(
         "--snapshot",
         required=True,
-        help=(
-            "Path to snapshot JSON file. "
-            "Supports pointer files like data/latest_15m.json"
-        ),
+        help=("Path to snapshot JSON file. Supports pointer files like data/latest_15m.json"),
     )
     ms.add_argument("--target", type=str, default="bitcoin", help="Target market substring filter")
     ms.add_argument(
@@ -1796,6 +1850,34 @@ def main() -> None:
         "--sweep",
         action="store_true",
         help="Run parameter sweep across k/theta/p_max combinations",
+    )
+    ib.add_argument(
+        "--horizon",
+        type=int,
+        default=1,
+        help="Number of snapshots ahead to evaluate outcome (default: 1)",
+    )
+    ib.add_argument(
+        "--fee-bps",
+        type=float,
+        default=50.0,
+        help="Taker fee in basis points (default: 50 = 0.5%%)",
+    )
+    ib.add_argument(
+        "--slippage-bps",
+        type=float,
+        default=10.0,
+        help="Slippage in basis points (default: 10 = 0.1%%)",
+    )
+    ib.add_argument(
+        "--show-trades",
+        action="store_true",
+        help="Show individual trades in human output",
+    )
+    ib.add_argument(
+        "--include-trades",
+        action="store_true",
+        help="Include full trade list in JSON output",
     )
     ib.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     ib.set_defaults(func=cmd_imbalance_backtest)
