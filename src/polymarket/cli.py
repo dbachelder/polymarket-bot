@@ -843,6 +843,34 @@ def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
             print("=" * 80)
 
 
+def cmd_marketdata_collect(args: argparse.Namespace) -> None:
+    """Collect market data using provider abstraction with auto-fallback."""
+    from pathlib import Path
+
+    from polymarket.marketdata.collector import collect_snapshot
+
+    out_dir = Path(args.out)
+
+    # Use provider-specific subdirectory
+    provider = args.provider
+    data_dir = out_dir / "marketdata" / provider
+
+    out_path = collect_snapshot(
+        out_dir=data_dir,
+        provider_name=provider,
+        symbol=args.symbol,
+        kline_intervals=args.intervals,
+        timeout=args.timeout,
+    )
+
+    if args.verbose:
+        print(f"Provider: {provider}")
+        print(f"Symbol: {args.symbol}")
+        print(f"Output: {out_path}")
+    else:
+        print(str(out_path))
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="polymarket")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1301,6 +1329,46 @@ def main() -> None:
     )
     mm.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     mm.set_defaults(func=cmd_mention_scan)
+
+    # Market data provider command (with auto-fallback)
+    mdc = sub.add_parser(
+        "marketdata-collect",
+        help="Collect BTC market data with provider fallback (binance/coinbase/kraken/auto)",
+    )
+    mdc.add_argument(
+        "--out",
+        default="data",
+        help="Output directory (default: data)",
+    )
+    mdc.add_argument(
+        "--provider",
+        choices=["binance", "coinbase", "kraken", "auto"],
+        default="auto",
+        help="Data provider (default: auto - tries binance, then coinbase, then kraken)",
+    )
+    mdc.add_argument(
+        "--symbol",
+        default="BTCUSDT",
+        help="Trading pair symbol (default: BTCUSDT)",
+    )
+    mdc.add_argument(
+        "--intervals",
+        nargs="+",
+        default=["1m", "5m"],
+        help="Kline intervals to fetch (default: 1m 5m)",
+    )
+    mdc.add_argument(
+        "--timeout",
+        type=float,
+        default=30.0,
+        help="Request timeout in seconds (default: 30)",
+    )
+    mdc.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Verbose output",
+    )
+    mdc.set_defaults(func=cmd_marketdata_collect)
 
     args = p.parse_args()
 
