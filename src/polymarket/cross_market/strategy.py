@@ -13,17 +13,16 @@ Exit: Close spread converges OR hold to resolution
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import ArbitrageOpportunity, CrossMarketEvent
+from . import ArbitrageOpportunity
 from .calculator import SpreadCalculator, quick_spread_check
 from .kalshi_client import KalshiClient
-from .matcher import EventMatcher, match_events_by_normalized_title
+from .matcher import EventMatcher
 from .polymarket_client import PolymarketClient
 from .tracker import PaperTradeTracker
 

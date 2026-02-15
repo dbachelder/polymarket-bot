@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -200,8 +199,6 @@ class PaperTradeTracker:
 
     def update_open_positions(self) -> None:
         """Update theoretical PnL for all open positions."""
-        now = datetime.now(UTC)
-
         for trade_id, trade in self.trades.items():
             if trade.status != "open":
                 continue
@@ -253,9 +250,6 @@ class PaperTradeTracker:
         """
         # Cost basis
         cost = (opportunity.yes_price + opportunity.no_price) * position_size
-
-        # Current value (mark to market)
-        current_value = (current_yes_price + current_no_price) * position_size
 
         # At resolution, one side pays $1, the other $0
         # So resolved value = $1 * position_size
