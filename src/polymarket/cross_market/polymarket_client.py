@@ -32,9 +32,7 @@ class PolymarketClient:
             fee_schedule: Fee structure (uses default if not provided)
         """
         self.fee_schedule = fee_schedule or POLYMARKET_FEE_SCHEDULE
-        self._http = httpx.Client(timeout=30.0, headers={
-            "User-Agent": "polymarket-bot/0.1"
-        })
+        self._http = httpx.Client(timeout=30.0, headers={"User-Agent": "polymarket-bot/0.1"})
 
     def fetch_active_markets(
         self,
@@ -102,7 +100,12 @@ class PolymarketClient:
             data = parse_next_data(html)
 
             # Extract markets from dehydrated state
-            dehydrated = data.get("props", {}).get("pageProps", {}).get("dehydratedState", {}).get("queries", [])
+            dehydrated = (
+                data.get("props", {})
+                .get("pageProps", {})
+                .get("dehydratedState", {})
+                .get("queries", [])
+            )
 
             for q in dehydrated:
                 state = q.get("state", {})

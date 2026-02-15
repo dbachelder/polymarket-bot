@@ -158,7 +158,7 @@ class PaperTradeTracker:
         if exit_yes_price is None and exit_no_price is None:
             # Held to resolution - assume we capture the full $1
             exit_yes_price = 1.0  # YES won
-            exit_no_price = 0.0   # NO lost
+            exit_no_price = 0.0  # NO lost
             status = "held_to_resolution"
         else:
             # Closed early
@@ -167,9 +167,7 @@ class PaperTradeTracker:
             status = "closed"
 
         # Calculate realized PnL
-        realized_pnl = self._calculate_realized_pnl(
-            trade, exit_yes_price, exit_no_price
-        )
+        realized_pnl = self._calculate_realized_pnl(trade, exit_yes_price, exit_no_price)
 
         updated_trade = PaperTrade(
             trade_id=trade.trade_id,
@@ -323,12 +321,8 @@ class PaperTradeTracker:
         closed_count = len(closed_trades)
 
         # Calculate PnL
-        total_realized_pnl = sum(
-            (t.realized_pnl or 0) for t in closed_trades
-        )
-        total_theoretical_pnl = sum(
-            (t.theoretical_pnl or 0) for t in open_trades
-        )
+        total_realized_pnl = sum((t.realized_pnl or 0) for t in closed_trades)
+        total_theoretical_pnl = sum((t.theoretical_pnl or 0) for t in open_trades)
 
         # Win rate
         winning_trades = [t for t in closed_trades if (t.realized_pnl or 0) > 0]
@@ -336,7 +330,11 @@ class PaperTradeTracker:
 
         # Average metrics
         avg_realized_pnl = total_realized_pnl / len(closed_trades) if closed_trades else 0.0
-        avg_spread = sum(t.opportunity.net_spread for t in self.trades.values()) / total_trades if total_trades else 0.0
+        avg_spread = (
+            sum(t.opportunity.net_spread for t in self.trades.values()) / total_trades
+            if total_trades
+            else 0.0
+        )
 
         return {
             "total_trades": total_trades,
@@ -351,7 +349,9 @@ class PaperTradeTracker:
             "trades_by_status": {
                 "open": open_count,
                 "closed": len([t for t in closed_trades if t.status == "closed"]),
-                "held_to_resolution": len([t for t in closed_trades if t.status == "held_to_resolution"]),
+                "held_to_resolution": len(
+                    [t for t in closed_trades if t.status == "held_to_resolution"]
+                ),
             },
         }
 
@@ -396,16 +396,10 @@ class PaperTradeTracker:
         date_end = date_start + timedelta(days=1)
 
         # Filter trades for this date
-        day_trades = [
-            t for t in self.trades.values()
-            if date_start <= t.entry_time < date_end
-        ]
+        day_trades = [t for t in self.trades.values() if date_start <= t.entry_time < date_end]
 
         day_opportunities = len(day_trades)
-        day_pnl = sum(
-            (t.realized_pnl or t.theoretical_pnl or 0)
-            for t in day_trades
-        )
+        day_pnl = sum((t.realized_pnl or t.theoretical_pnl or 0) for t in day_trades)
 
         return {
             "date": date_start.strftime("%Y-%m-%d"),

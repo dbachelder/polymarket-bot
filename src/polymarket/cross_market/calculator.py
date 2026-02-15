@@ -161,7 +161,7 @@ class SpreadCalculator:
 
         # Try all venue pairs
         for i, (venue_a, market_a) in enumerate(venues):
-            for venue_b, market_b in venues[i + 1:]:
+            for venue_b, market_b in venues[i + 1 :]:
                 # Calculate both directions:
                 # 1. Buy YES at A, Buy NO at B
                 # 2. Buy YES at B, Buy NO at A
