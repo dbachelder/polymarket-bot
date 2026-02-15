@@ -2,8 +2,6 @@
 
 from decimal import Decimal
 
-import pytest
-
 from polymarket.btc_both_sides_arb import (
     BothSidesArbitrageStrategy,
     BothSidesOpportunity,
