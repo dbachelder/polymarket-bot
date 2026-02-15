@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+import httpx
 
 from polymarket.binance_collector import (
     AggTrade,
@@ -140,6 +141,27 @@ class TestBinanceRestClient:
         client = BinanceRestClient()
         client.close()
         assert client.client.is_closed
+
+    def test_endpoint_rotation_on_451(self, monkeypatch):
+        # First endpoint blocked; second succeeds.
+        client = BinanceRestClient(base_urls=["https://api.binance.com", "https://api1.binance.com"])
+
+        calls: list[str] = []
+
+        def fake_get(url, params=None):  # noqa: ANN001
+            calls.append(url)
+            req = httpx.Request("GET", url, params=params)
+            if len(calls) == 1:
+                return httpx.Response(451, request=req, json={"msg": "Unavailable For Legal Reasons"})
+            return httpx.Response(200, request=req, json=[{"T": 1, "p": "1", "q": "1", "m": False, "a": 1}])
+
+        monkeypatch.setattr(client.client, "get", fake_get)
+
+        trades = client.get_agg_trades(symbol="BTCUSDT", limit=1)
+        assert len(trades) == 1
+        assert calls[0].startswith("https://api.binance.com")
+        assert calls[1].startswith("https://api1.binance.com")
+        client.close()
 
 
 class TestBinanceWebSocketCollector:

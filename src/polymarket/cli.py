@@ -104,18 +104,55 @@ def cmd_collect_15m_loop(args: argparse.Namespace) -> None:
 
 
 def cmd_pnl_verify(args: argparse.Namespace) -> None:
-    """Verify PnL from fills data."""
-    from .pnl import compute_pnl, load_fills_from_file, load_orderbooks_from_file
+    """Verify PnL from fills data with cash tracking and sanity checks."""
+    from decimal import Decimal
 
-    input_path = Path(args.input)
-    if not input_path.exists():
+    from .pnl import (
+        PnLVerifier,
+        load_fills_from_file,
+        load_orderbooks_from_file,
+        load_orderbooks_from_snapshot,
+        save_daily_summary,
+    )
+
+    # Determine fills source
+    fills: list = []
+
+    if args.input:
+        input_path = Path(args.input)
+        if not input_path.exists():
+            print(
+                json.dumps({"error": f"Input file not found: {args.input}"}),
+                file=__import__("sys").stderr,
+            )
+            raise SystemExit(1)
+        fills = load_fills_from_file(input_path)
+    elif args.data_dir:
+        # Load from data directory - look for fills.json or fills.jsonl
+        data_dir = Path(args.data_dir)
+        fills_path = data_dir / "fills.json"
+        fills_jsonl_path = data_dir / "fills.jsonl"
+
+        if fills_path.exists():
+            fills = load_fills_from_file(fills_path)
+        elif fills_jsonl_path.exists():
+            fills = load_fills_from_file(fills_jsonl_path)
+        else:
+            print(
+                json.dumps(
+                    {"error": f"No fills.json or fills.jsonl found in {args.data_dir}"}
+                ),
+                file=__import__("sys").stderr,
+            )
+            raise SystemExit(1)
+    else:
         print(
-            json.dumps({"error": f"Input file not found: {args.input}"}),
+            json.dumps(
+                {"error": "Must specify --input or --data-dir"}
+            ),
             file=__import__("sys").stderr,
         )
         raise SystemExit(1)
-
-    fills = load_fills_from_file(input_path)
 
     # Load optional orderbooks for liquidation value
     orderbooks = None
@@ -123,48 +160,109 @@ def cmd_pnl_verify(args: argparse.Namespace) -> None:
         books_path = Path(args.books)
         if books_path.exists():
             orderbooks = load_orderbooks_from_file(books_path)
+    elif args.snapshot:
+        snapshot_path = Path(args.snapshot)
+        if snapshot_path.exists():
+            orderbooks = load_orderbooks_from_snapshot(snapshot_path)
+    elif args.data_dir:
+        # Try to load latest snapshot from data directory
+        data_dir = Path(args.data_dir)
+        snapshot_files = sorted(data_dir.glob("snapshot_*.json"))
+        if snapshot_files:
+            orderbooks = load_orderbooks_from_snapshot(snapshot_files[-1])
 
-    report = compute_pnl(fills, orderbooks=orderbooks)
+    # Build verifier
+    starting_cash = Decimal(str(args.starting_cash)) if args.starting_cash else Decimal("0")
+    verifier = PnLVerifier(starting_cash=starting_cash)
+    verifier.add_fills(fills)
+
+    # Compute report
+    report = verifier.compute_pnl(
+        orderbooks=orderbooks,
+        since=args.since,
+        market_filter=args.market,
+    )
+
+    # Save daily summary if requested
+    if args.save_daily:
+        summary_path = save_daily_summary(
+            report,
+            out_dir=Path(args.daily_dir) if args.daily_dir else None,
+        )
+        if args.format == "human":
+            print(f"\nDaily summary saved: {summary_path}")
 
     # Output format
-    output = report.to_dict()
-
     if args.format == "json":
-        print(json.dumps(output, indent=2))
+        print(report.to_json())
     else:
         # Human-readable format
-        print("=" * 60)
+        output = report.to_dict()
+
+        print("=" * 70)
         print("PnL VERIFICATION REPORT")
-        print("=" * 60)
-        print(f"\nTotal Fills:      {output['summary']['total_fills']}")
+        print("=" * 70)
+
+        # Metadata
+        if output["metadata"]["since"]:
+            print(f"Since:            {output['metadata']['since']}")
+        if output["metadata"]["market_filter"]:
+            print(f"Market Filter:    {output['metadata']['market_filter']}")
+        print(f"Generated:        {output['metadata']['generated_at']}")
+
+        print("\n--- Summary ---")
+        print(f"Total Fills:      {output['summary']['total_fills']}")
         print(f"Unique Tokens:    {output['summary']['unique_tokens']}")
+        print(f"Unique Markets:   {output['summary']['unique_markets']}")
+
+        print("\n--- Cash Tracking ---")
+        print(f"Starting Cash:    ${output['cash']['starting_cash']:,.2f}")
+        print(f"Cash Flow:        ${output['cash']['cash_flow_from_fills']:,.2f}")
+        print(f"Ending Cash:      ${output['cash']['ending_cash']:,.2f}")
+
         print("\n--- PnL Breakdown ---")
         print(f"Realized PnL:     ${output['pnl']['realized_pnl']:,.2f}")
         print(f"Unrealized PnL:   ${output['pnl']['unrealized_pnl']:,.2f}")
         print(f"Total Fees:       ${output['pnl']['total_fees']:,.2f}")
         print(f"Net PnL:          ${output['pnl']['net_pnl']:,.2f}")
+
         print("\n--- Liquidation Analysis ---")
-        print(f"Mark to Market:   ${output['liquidation']['mark_to_market']:,.2f}")
+        print(f"Mark to Mid:      ${output['liquidation']['mark_to_mid']:,.2f}")
         print(f"Liquidation Val:  ${output['liquidation']['liquidation_value']:,.2f}")
         print(
-            f"Discount:         ${output['liquidation']['liquidation_discount']:,.2f} ({output['liquidation']['discount_pct']:.1f}%)"
+            f"Discount:         ${output['liquidation']['liquidation_discount']:,.2f} "
+            f"({output['liquidation']['discount_pct']:.1f}%)"
         )
+
+        print("\n--- Verification ---")
+        cash_ok = "✓" if output["verification"]["cashflow_conserved"] else "✗"
+        pos_ok = "✓" if output["verification"]["position_verified"] else "✗"
+        print(f"Cashflow:         {cash_ok} Conserved")
+        print(f"Positions:        {pos_ok} Verified")
 
         if output["positions"]:
             print(f"\n--- Open Positions ({len(output['positions'])}) ---")
             for pos in output["positions"][:10]:  # Limit to 10
-                print(f"  {pos['token_id'][:40]}...")
+                slug = pos.get("market_slug", "")
+                token_display = slug if slug else pos["token_id"][:20] + "..."
+                print(f"\n  {token_display}")
                 print(f"    Size: {pos['net_size']:,.2f} @ ${pos['avg_cost_basis']:.3f}")
                 print(
-                    f"    Price: ${pos['current_price']:.3f} | Unrealized: ${pos['unrealized_pnl']:,.2f}"
+                    f"    Mid:  ${pos['current_price']:.3f} | "
+                    f"Unrealized: ${pos['unrealized_pnl']:,.2f}"
                 )
+                if pos.get("liquidation_value") != pos.get("mark_to_mid"):
+                    print(
+                        f"    Liquid: ${pos['liquidation_value']:,.2f} "
+                        f"(discount: ${pos['mark_to_mid'] - pos['liquidation_value']:,.2f})"
+                    )
 
-        if output["warnings"]:
-            print("\n--- Warnings ---")
-            for warning in output["warnings"]:
+        if output["verification"]["warnings"]:
+            print(f"\n--- Warnings ({len(output['verification']['warnings'])}) ---")
+            for warning in output["verification"]["warnings"]:
                 print(f"  ! {warning}")
 
-        print("\n" + "=" * 60)
+        print("\n" + "=" * 70)
 
 
 def cmd_microstructure(args: argparse.Namespace) -> None:
@@ -200,7 +298,8 @@ def cmd_microstructure(args: argparse.Namespace) -> None:
             print("\nThresholds:")
             print(f"  Spread alert:     > {summary['spread_threshold']:.2f}")
             print(
-                f"  Extreme pin:      <= {summary['extreme_pin_threshold']:.2f} or >= {1.0 - summary['extreme_pin_threshold']:.2f}"
+                f"  Extreme pin:      <= {summary['extreme_pin_threshold']:.2f} "
+                f"or >= {1.0 - summary['extreme_pin_threshold']:.2f}"
             )
             print(f"  Depth levels:     {summary['depth_levels']}")
 
@@ -298,6 +397,35 @@ def cmd_binance_features(args: argparse.Namespace) -> None:
 
     save_aligned_features(aligned, out_path)
     print(f"Aligned {len(aligned)} records to {out_path}")
+
+
+def cmd_dataset_join(args: argparse.Namespace) -> None:
+    """Build aligned dataset and compute lead/lag correlations."""
+    from pathlib import Path
+
+    from .dataset_join import build_aligned_dataset, save_report
+
+    polymarket_dir = Path(args.polymarket_dir)
+    binance_dir = Path(args.binance_dir)
+    out_path = Path(args.out)
+
+    report = build_aligned_dataset(
+        polymarket_data_dir=polymarket_dir,
+        binance_data_dir=binance_dir,
+        hours=float(args.hours),
+        tolerance_seconds=float(args.tolerance),
+    )
+
+    text_path = out_path.with_suffix(".txt") if args.text else None
+    json_path, txt_path = save_report(report, out_path, text_path)
+
+    if args.format == "json":
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(report.to_text())
+        print(f"\nJSON report saved: {json_path}")
+        if txt_path:
+            print(f"Text report saved: {txt_path}")
 
 
 def cmd_health_check(args: argparse.Namespace) -> None:
@@ -529,10 +657,63 @@ def main() -> None:
     )
     pc15l.set_defaults(func=cmd_collect_15m_loop)
 
-    pnl = sub.add_parser("pnl-verify", help="Verify PnL from fills data (debunk screenshots)")
-    pnl.add_argument("--input", required=True, help="Path to fills JSON file")
-    pnl.add_argument("--books", default=None, help="Path to orderbooks JSON for liquidation value")
-    pnl.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    # Enhanced PnL verify command
+    pnl = sub.add_parser(
+        "pnl-verify",
+        help="Verify PnL from fills with cash tracking, sanity checks, and liquidation value",
+    )
+    pnl.add_argument(
+        "--input",
+        default=None,
+        help="Path to fills JSON/JSONL file (alternative to --data-dir)",
+    )
+    pnl.add_argument(
+        "--data-dir",
+        default=None,
+        help="Data directory containing fills.json or fills.jsonl",
+    )
+    pnl.add_argument(
+        "--books",
+        default=None,
+        help="Path to orderbooks JSON for liquidation value calculation",
+    )
+    pnl.add_argument(
+        "--snapshot",
+        default=None,
+        help="Path to collector snapshot for orderbook data",
+    )
+    pnl.add_argument(
+        "--since",
+        default=None,
+        help="ISO timestamp to filter fills (inclusive)",
+    )
+    pnl.add_argument(
+        "--market",
+        default=None,
+        help="Market slug filter (substring match)",
+    )
+    pnl.add_argument(
+        "--starting-cash",
+        type=float,
+        default=0.0,
+        help="Starting cash balance (default: 0)",
+    )
+    pnl.add_argument(
+        "--save-daily",
+        action="store_true",
+        help="Save daily summary to data/pnl/",
+    )
+    pnl.add_argument(
+        "--daily-dir",
+        default=None,
+        help="Custom directory for daily summaries (default: data/pnl/)",
+    )
+    pnl.add_argument(
+        "--format",
+        choices=["json", "human"],
+        default="human",
+        help="Output format",
+    )
     pnl.set_defaults(func=cmd_pnl_verify)
 
     ms = sub.add_parser("microstructure", help="Analyze market microstructure from snapshot")
@@ -594,6 +775,33 @@ def main() -> None:
     bf.add_argument("--out", default="data/aligned_features.json", help="Output file")
     bf.add_argument("--tolerance", type=float, default=1.0, help="Alignment tolerance in seconds")
     bf.set_defaults(func=cmd_binance_features)
+
+    dj = sub.add_parser(
+        "dataset-join",
+        help="Build aligned dataset and compute lead/lag correlations (BTC vs PM 15m)",
+    )
+    dj.add_argument(
+        "--polymarket-dir", default="data", help="Polymarket data directory (default: data)"
+    )
+    dj.add_argument(
+        "--binance-dir", default="data/binance", help="Binance data directory (default: data/binance)"
+    )
+    dj.add_argument(
+        "--hours", type=float, default=24.0, help="Hours of data to analyze (default: 24)"
+    )
+    dj.add_argument(
+        "--tolerance", type=float, default=5.0, help="Alignment tolerance in seconds (default: 5)"
+    )
+    dj.add_argument(
+        "--out", default="data/join_report.json", help="Output JSON file (default: data/join_report.json)"
+    )
+    dj.add_argument(
+        "--text", action="store_true", help="Also save human-readable text report"
+    )
+    dj.add_argument(
+        "--format", choices=["json", "human"], default="human", help="Console output format"
+    )
+    dj.set_defaults(func=cmd_dataset_join)
 
     hc = sub.add_parser("health-check", help="Check collector health and staleness SLA")
     hc.add_argument("--data-dir", default="data", help="Data directory containing snapshots")

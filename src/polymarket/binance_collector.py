@@ -10,6 +10,7 @@ import asyncio
 import csv
 import json
 import logging
+import os
 import random
 import time
 from collections import deque
@@ -25,7 +26,17 @@ from websockets.exceptions import ConnectionClosed, ConnectionClosedOK
 logger = logging.getLogger(__name__)
 
 # Binance public API endpoints (no authentication required)
+#
+# NOTE: Some hosts/IPs receive HTTP 451 from api.binance.com ("Unavailable For Legal Reasons").
+# We support endpoint rotation + env overrides.
 BINANCE_REST_BASE = "https://api.binance.com"
+BINANCE_REST_FALLBACK_BASES = [
+    "https://api.binance.com",
+    "https://api1.binance.com",
+    "https://api2.binance.com",
+    "https://api3.binance.com",
+    "https://api4.binance.com",
+]
 BINANCE_WS_BASE = "wss://stream.binance.com:9443/ws"
 
 # Default symbol for BTC spot (USDT pair)
@@ -128,12 +139,47 @@ class Snapshot:
 
 
 class BinanceRestClient:
-    """REST API client for Binance public market data."""
+    """REST API client for Binance public market data.
 
-    def __init__(self, base_url: str = BINANCE_REST_BASE, timeout: float = 30.0):
-        self.base_url = base_url
+    Supports endpoint rotation (HTTP 451 / connectivity issues) and env overrides.
+
+    Env:
+      - BINANCE_REST_BASE: single base URL (e.g. https://api1.binance.com)
+      - BINANCE_REST_BASE_URLS: comma-separated base URLs (highest priority)
+    """
+
+    def __init__(
+        self,
+        base_url: str = BINANCE_REST_BASE,
+        timeout: float = 30.0,
+        base_urls: list[str] | None = None,
+    ):
         self.timeout = timeout
+        self.base_urls = base_urls or self._get_base_urls(default_base=base_url)
+        self._base_url_idx = 0
+        self.base_url = self.base_urls[self._base_url_idx]
         self.client = httpx.Client(timeout=timeout, follow_redirects=True)
+
+    @staticmethod
+    def _get_base_urls(default_base: str) -> list[str]:
+        # Highest priority: explicit list
+        raw_list = os.environ.get("BINANCE_REST_BASE_URLS")
+        if raw_list:
+            urls = [u.strip() for u in raw_list.split(",") if u.strip()]
+            if urls:
+                return urls
+
+        # Next: single override
+        raw_single = os.environ.get("BINANCE_REST_BASE")
+        if raw_single and raw_single.strip():
+            return [raw_single.strip()]
+
+        # Default: include fallbacks (and keep default_base first)
+        bases = [default_base]
+        for u in BINANCE_REST_FALLBACK_BASES:
+            if u not in bases:
+                bases.append(u)
+        return bases
 
     def close(self) -> None:
         self.client.close()
@@ -144,12 +190,47 @@ class BinanceRestClient:
     def __exit__(self, *args: object) -> None:
         self.close()
 
-    def _get(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Make a GET request to Binance API."""
-        url = f"{self.base_url}{endpoint}"
-        response = self.client.get(url, params=params)
-        response.raise_for_status()
-        return response.json()
+    def _get(self, endpoint: str, params: dict[str, Any] | None = None) -> Any:
+        """Make a GET request to Binance API.
+
+        Retries across configured base URLs on common geo/legal blocks (HTTP 451)
+        and transient network errors.
+        """
+        last_exc: Exception | None = None
+
+        for i, base in enumerate(self.base_urls):
+            self.base_url = base
+            url = f"{base}{endpoint}"
+            try:
+                response = self.client.get(url, params=params)
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPStatusError as e:
+                last_exc = e
+                status = e.response.status_code
+                # 451 often indicates region/legal block on this endpoint.
+                if status in (451, 418, 429) and i < len(self.base_urls) - 1:
+                    logger.warning(
+                        "Binance REST blocked (%s) on %s; trying next endpoint...",
+                        status,
+                        base,
+                    )
+                    continue
+                raise
+            except (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException) as e:
+                last_exc = e
+                if i < len(self.base_urls) - 1:
+                    logger.warning(
+                        "Binance REST connectivity error on %s (%s); trying next endpoint...",
+                        base,
+                        type(e).__name__,
+                    )
+                    continue
+                raise
+
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("Binance REST request failed without exception")
 
     def get_agg_trades(
         self,
