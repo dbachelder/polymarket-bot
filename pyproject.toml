@@ -8,6 +8,7 @@ dependencies = [
   'pandas>=2.2',
   'python-dotenv>=1.0',
   'websockets>=13.0',
+  'numpy>=1.26',
 ]
 
 [project.optional-dependencies]

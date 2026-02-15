@@ -326,6 +326,102 @@ def cmd_health_check(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
+    """Run orderbook imbalance strategy backtest."""
+    from pathlib import Path
+
+    from .strategy_imbalance import (
+        load_snapshots_for_backtest,
+        parameter_sweep,
+        run_backtest,
+    )
+
+    data_dir = Path(args.data_dir)
+
+    # Load snapshots
+    snapshots = load_snapshots_for_backtest(
+        data_dir=data_dir,
+        interval=args.interval,
+    )
+
+    if not snapshots:
+        print(
+            json.dumps({"error": f"No snapshots found in {data_dir} for interval {args.interval}"}),
+            file=__import__("sys").stderr,
+        )
+        raise SystemExit(1)
+
+    if args.sweep:
+        # Parameter sweep
+        results = parameter_sweep(
+            snapshots=snapshots,
+            target_market_substring=args.target,
+        )
+
+        if args.format == "json":
+            print(json.dumps({"results": results}, indent=2))
+        else:
+            print("=" * 80)
+            print("ORDERBOOK IMBALANCE STRATEGY - PARAMETER SWEEP")
+            print("=" * 80)
+            print(f"Snapshots analyzed: {len(snapshots)}")
+            print(f"Target market: {args.target}")
+            print(f"\n{'Rank':<6}{'k':<4}{'theta':<8}{'p_max':<8}{'Trades':<8}{'UP':<6}{'DOWN':<8}{'Avg Conf':<10}")
+            print("-" * 80)
+
+            for i, result in enumerate(results[:10], 1):  # Top 10
+                p = result["params"]
+                m = result["metrics"]
+                print(
+                    f"{i:<6}{p['k']:<4}{p['theta']:<8.2f}{p['p_max']:<8.2f}"
+                    f"{m['total_trades']:<8}{m['up_trades']:<6}{m['down_trades']:<8}"
+                    f"{m['avg_confidence']:<10.3f}"
+                )
+
+            print("=" * 80)
+
+    else:
+        # Single backtest run
+        result = run_backtest(
+            snapshots=snapshots,
+            k=args.k,
+            theta=args.theta,
+            p_max=args.p_max,
+            target_market_substring=args.target,
+        )
+
+        if args.format == "json":
+            print(json.dumps(result.to_dict(), indent=2))
+        else:
+            print("=" * 80)
+            print("ORDERBOOK IMBALANCE STRATEGY - BACKTEST RESULTS")
+            print("=" * 80)
+            print(f"Snapshots analyzed: {len(snapshots)}")
+            print(f"Target market: {args.target}")
+            print("\nParameters:")
+            print(f"  k (depth levels):     {args.k}")
+            print(f"  theta (threshold):    {args.theta:.2f}")
+            print(f"  p_max (max price):    {args.p_max:.2f}")
+
+            print("\n--- Results ---")
+            print(f"Total trades:     {result.metrics['total_trades']}")
+            print(f"UP trades:        {result.metrics['up_trades']}")
+            print(f"DOWN trades:      {result.metrics['down_trades']}")
+            print(f"Avg confidence:   {result.metrics['avg_confidence']:.3f}")
+            print(f"Avg entry price:  {result.metrics['avg_entry_price']:.3f}")
+
+            if result.trades:
+                print("\n--- Recent Trades (last 10) ---")
+                for t in result.trades[-10:]:
+                    print(
+                        f"  {t.timestamp.strftime('%H:%M')} | {t.decision:<6} | "
+                        f"imb={t.imbalance_value:.3f} | mid={t.mid_yes:.3f} | "
+                        f"entry={t.entry_price:.3f} | conf={t.confidence:.2f}"
+                    )
+
+            print("=" * 80)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="polymarket")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -511,6 +607,51 @@ def main() -> None:
     hc.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     hc.add_argument("--fail", action="store_true", help="Exit with error code if unhealthy")
     hc.set_defaults(func=cmd_health_check)
+
+    # Orderbook imbalance backtest command
+    ib = sub.add_parser(
+        "imbalance-backtest",
+        help="Backtest orderbook imbalance strategy on BTC interval markets",
+    )
+    ib.add_argument("--data-dir", default="data", help="Data directory containing snapshots")
+    ib.add_argument(
+        "--interval",
+        choices=["5m", "15m"],
+        default="15m",
+        help="Market interval to analyze (default: 15m)",
+    )
+    ib.add_argument(
+        "--k",
+        type=int,
+        default=3,
+        choices=[1, 3, 5],
+        help="Depth levels for imbalance calculation (default: 3)",
+    )
+    ib.add_argument(
+        "--theta",
+        type=float,
+        default=0.70,
+        help="Imbalance threshold 0.5-1.0 (default: 0.70)",
+    )
+    ib.add_argument(
+        "--p-max",
+        type=float,
+        default=0.65,
+        help="Max price to pay for position 0.5-1.0 (default: 0.65)",
+    )
+    ib.add_argument(
+        "--target",
+        type=str,
+        default="bitcoin",
+        help="Target market substring filter (default: bitcoin)",
+    )
+    ib.add_argument(
+        "--sweep",
+        action="store_true",
+        help="Run parameter sweep across k/theta/p_max combinations",
+    )
+    ib.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    ib.set_defaults(func=cmd_imbalance_backtest)
 
     args = p.parse_args()
 
