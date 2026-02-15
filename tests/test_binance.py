@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -14,12 +13,9 @@ from polymarket.binance_collector import (
     BinanceWebSocketCollector,
     Kline,
     Snapshot,
-    collect_snapshot_rest,
 )
 from polymarket.binance_features import (
     FeatureBuilder,
-    Returns,
-    VolumeMetrics,
     align_to_polymarket_snapshots,
 )
 
