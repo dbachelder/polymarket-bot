@@ -16,7 +16,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 import websockets
@@ -175,17 +175,17 @@ class BinanceRestClient:
         if end_time_ms is not None:
             params["endTime"] = end_time_ms
 
-        data = self._get("/api/v3/aggTrades", params)
+        raw_data: Any = self._get("/api/v3/aggTrades", params)
 
         return [
             AggTrade(
-                timestamp_ms=item["T"],
+                timestamp_ms=int(item["T"]),
                 price=float(item["p"]),
                 quantity=float(item["q"]),
-                is_buyer_maker=item["m"],
-                trade_id=item["a"],
+                is_buyer_maker=bool(item["m"]),
+                trade_id=int(item["a"]),
             )
-            for item in data
+            for item in raw_data
         ]
 
     def get_klines(
@@ -218,23 +218,23 @@ class BinanceRestClient:
         if end_time_ms is not None:
             params["endTime"] = end_time_ms
 
-        data = self._get("/api/v3/klines", params)
+        raw_data: Any = self._get("/api/v3/klines", params)
 
         return [
             Kline(
-                open_time_ms=item[0],
-                close_time_ms=item[6],
+                open_time_ms=int(item[0]),
+                close_time_ms=int(item[6]),
                 open_price=float(item[1]),
                 high_price=float(item[2]),
                 low_price=float(item[3]),
                 close_price=float(item[4]),
                 volume=float(item[5]),
                 quote_volume=float(item[7]),
-                trades_count=item[8],
+                trades_count=int(item[8]),
                 taker_buy_volume=float(item[9]),
                 taker_buy_quote_volume=float(item[10]),
             )
-            for item in data
+            for item in raw_data
         ]
 
 
@@ -255,7 +255,7 @@ class BinanceWebSocketCollector:
         self.klines: dict[str, Kline | None] = {}
         self._running = False
         self._reconnect_delay = 1.0
-        self._ws: websockets.WebSocketClientProtocol | None = None
+        self._ws: Any = None
 
     def _get_stream_url(self, streams: list[str]) -> str:
         """Build WebSocket URL for combined streams."""
@@ -298,7 +298,7 @@ class BinanceWebSocketCollector:
     async def _connect_and_listen(
         self,
         kline_intervals: list[str] | None = None,
-        on_snapshot: callable | None = None,
+        on_snapshot: Callable[[Snapshot], None] | None = None,
         snapshot_interval_seconds: float = 5.0,
     ) -> None:
         """Connect to WebSocket and listen for messages."""
@@ -371,7 +371,7 @@ class BinanceWebSocketCollector:
     async def run(
         self,
         kline_intervals: list[str] | None = None,
-        on_snapshot: callable | None = None,
+        on_snapshot: Callable[[Snapshot], None] | None = None,
         snapshot_interval_seconds: float = 5.0,
     ) -> None:
         """Run the WebSocket collector with automatic reconnection.

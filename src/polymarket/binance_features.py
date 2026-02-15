@@ -11,9 +11,11 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+import numpy as np
 import pandas as pd
+from pandas import Series
 
 from .binance_collector import AggTrade
 
@@ -185,7 +187,8 @@ class FeatureBuilder:
             return []
 
         if reference_time_ms is None:
-            reference_time_ms = int(df["timestamp_ms"].max())
+            max_ts = cast(float, df["timestamp_ms"].max())
+            reference_time_ms = int(max_ts) if pd.notna(max_ts) else 0
 
         reference_price = self._get_price_at_time(df, reference_time_ms)
 
@@ -198,7 +201,7 @@ class FeatureBuilder:
                 continue
 
             simple_return = (reference_price - start_price) / start_price
-            log_return = pd.np.log(reference_price / start_price) if hasattr(pd, 'np') else __import__('numpy').log(reference_price / start_price)
+            log_return = float(np.log(reference_price / start_price))
 
             results.append(
                 Returns(
@@ -247,11 +250,13 @@ class FeatureBuilder:
             return []
 
         if reference_time_ms is None:
-            reference_time_ms = int(df["timestamp_ms"].max())
+            max_ts = cast(float, df["timestamp_ms"].max())
+            reference_time_ms = int(max_ts) if pd.notna(max_ts) else 0
 
         # Calculate log returns between consecutive trades
         df = df.sort_values("timestamp_ms").reset_index(drop=True)
-        df["log_return"] = df["price"].apply(lambda x: pd.np.log(x) if hasattr(pd, 'np') else __import__('numpy').log(x)).diff()
+        log_prices = pd.Series(np.log(df["price"].to_numpy()), index=df.index)
+        df["log_return"] = log_prices.diff()
 
         results = []
         for window_sec in self.vol_windows:
@@ -263,12 +268,14 @@ class FeatureBuilder:
             if len(window_df) < 2:
                 continue
 
-            returns = window_df["log_return"].dropna()
+            returns = cast(Series, window_df["log_return"]).dropna()
             if len(returns) < 2:
                 continue
 
-            mean_return = float(returns.mean())
-            variance = float(returns.var())
+            mean_ret = cast(float, returns.mean())
+            var_ret = cast(float, returns.var())
+            mean_return = float(mean_ret) if pd.notna(mean_ret) else 0.0
+            variance = float(var_ret) if pd.notna(var_ret) else 0.0
 
             # Annualize (assuming 365 days * 24 hours * 60 minutes * 60 seconds)
             seconds_per_year = 365 * 24 * 60 * 60
@@ -310,7 +317,8 @@ class FeatureBuilder:
             return []
 
         if reference_time_ms is None:
-            reference_time_ms = int(df["timestamp_ms"].max())
+            max_ts = cast(float, df["timestamp_ms"].max())
+            reference_time_ms = int(max_ts) if pd.notna(max_ts) else 0
 
         results = []
         for window_sec in self.horizons:
@@ -322,19 +330,26 @@ class FeatureBuilder:
             if window_df.empty:
                 continue
 
-            total_volume = float(window_df["quantity"].sum())
-            signed_volume = float(window_df["signed_volume"].sum())
+            total_qty = cast(float, window_df["quantity"].sum())
+            total_volume = float(total_qty) if pd.notna(total_qty) else 0.0
+            signed_qty = cast(float, window_df["signed_volume"].sum())
+            signed_volume = float(signed_qty) if pd.notna(signed_qty) else 0.0
 
             buy_mask = ~window_df["is_buyer_maker"]
             sell_mask = window_df["is_buyer_maker"]
 
-            buy_volume = float(window_df.loc[buy_mask, "quantity"].sum())
-            sell_volume = float(window_df.loc[sell_mask, "quantity"].sum())
-            buy_count = int(buy_mask.sum())
-            sell_count = int(sell_mask.sum())
+            buy_qty = cast(float, window_df.loc[buy_mask, "quantity"].sum())
+            buy_volume = float(buy_qty) if pd.notna(buy_qty) else 0.0
+            sell_qty = cast(float, window_df.loc[sell_mask, "quantity"].sum())
+            sell_volume = float(sell_qty) if pd.notna(sell_qty) else 0.0
+            buy_sum = cast(int, buy_mask.sum())
+            buy_count = int(buy_sum) if pd.notna(buy_sum) else 0
+            sell_sum = cast(int, sell_mask.sum())
+            sell_count = int(sell_sum) if pd.notna(sell_sum) else 0
 
             # VWAP calculation
-            notional = float((window_df["price"] * window_df["quantity"]).sum())
+            notional_sum = cast(float, (window_df["price"] * window_df["quantity"]).sum())
+            notional = float(notional_sum) if pd.notna(notional_sum) else 0.0
             vwap = notional / total_volume if total_volume > 0 else 0.0
 
             results.append(
