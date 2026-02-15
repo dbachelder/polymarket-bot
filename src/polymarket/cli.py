@@ -928,6 +928,235 @@ def cmd_watchdog(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def cmd_paper_record_fill(args: argparse.Namespace) -> None:
+    """Record a paper trade fill."""
+    from decimal import Decimal
+    from pathlib import Path
+
+    from .paper_trading import PaperTradingEngine
+
+    engine = PaperTradingEngine(
+        data_dir=Path(args.data_dir),
+        starting_cash=Decimal(str(args.starting_cash)),
+    )
+
+    fill = engine.record_fill(
+        token_id=args.token_id,
+        side=args.side,
+        size=Decimal(str(args.size)),
+        price=Decimal(str(args.price)),
+        fee=Decimal(str(args.fee)) if args.fee else Decimal("0"),
+        market_slug=args.market_slug,
+        market_question=args.market_question,
+    )
+
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "status": "recorded",
+                    "fill": {
+                        "token_id": fill.token_id,
+                        "side": fill.side,
+                        "size": str(fill.size),
+                        "price": str(fill.price),
+                        "timestamp": fill.timestamp,
+                    },
+                },
+                indent=2,
+            )
+        )
+    else:
+        print(f"✓ Recorded {fill.side.upper()} {fill.size} @ {fill.price}")
+        print(f"  Token: {fill.token_id}")
+        print(f"  Cash impact: ${fill.cash_flow:,.2f}")
+
+
+def cmd_paper_positions(args: argparse.Namespace) -> None:
+    """Show current paper trading positions."""
+    from pathlib import Path
+
+    from .paper_trading import PaperTradingEngine
+
+    engine = PaperTradingEngine(data_dir=Path(args.data_dir))
+    positions = engine.get_positions()
+
+    # Filter to open positions only unless --all
+    if not args.all:
+        positions = {k: v for k, v in positions.items() if v.net_size != 0}
+
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "positions": [p.to_dict() for p in positions.values()],
+                    "count": len(positions),
+                },
+                indent=2,
+            )
+        )
+    else:
+        print("=" * 70)
+        print("PAPER TRADING POSITIONS")
+        print("=" * 70)
+        print(f"Total positions: {len(positions)}")
+        print(f"Open positions: {len([p for p in positions.values() if p.net_size != 0])}")
+        print()
+
+        for pos in sorted(positions.values(), key=lambda x: abs(x.net_size), reverse=True):
+            status = "OPEN" if pos.net_size != 0 else "CLOSED"
+            slug = pos.market_slug or pos.token_id[:30]
+            print(f"{status:<7} | {slug:<40}")
+            print(f"        Size: {pos.net_size:>12,.2f} | Avg cost: ${pos.avg_cost_basis:.3f}")
+            print(
+                f"        Realized PnL: ${pos.realized_pnl:>10,.2f} | Fees: ${pos.total_fees:.2f}"
+            )
+            print()
+
+
+def cmd_paper_equity(args: argparse.Namespace) -> None:
+    """Show current paper trading equity."""
+    from pathlib import Path
+
+    from .paper_trading import PaperTradingEngine
+
+    engine = PaperTradingEngine(data_dir=Path(args.data_dir))
+
+    # Use snapshot if provided
+    snapshot_path = Path(args.snapshot) if args.snapshot else None
+
+    equity = engine.compute_equity(snapshot_path=snapshot_path)
+
+    if args.format == "json":
+        print(json.dumps(equity.to_dict(), indent=2))
+    else:
+        print("=" * 70)
+        print("PAPER TRADING EQUITY")
+        print("=" * 70)
+        print(f"Timestamp: {equity.timestamp}")
+        print()
+        print(f"Cash Balance:       ${equity.cash_balance:>12,.2f}")
+        print(f"Mark to Market:     ${equity.mark_to_market:>12,.2f}")
+        print(f"Liquidation Value:  ${equity.liquidation_value:>12,.2f}")
+        print(f"Net Equity:         ${equity.net_equity:>12,.2f}")
+        print()
+        print(f"Realized PnL:       ${equity.realized_pnl:>12,.2f}")
+        print(f"Unrealized PnL:     ${equity.unrealized_pnl:>12,.2f}")
+        print(f"Total Fees:         ${equity.total_fees:>12,.2f}")
+        print()
+        print(f"Positions:          {equity.position_count}")
+        print(f"Open Positions:     {equity.open_position_count}")
+        print("=" * 70)
+
+
+def cmd_paper_reconcile(args: argparse.Namespace) -> None:
+    """Reconcile paper positions against a collector snapshot."""
+    from decimal import Decimal
+    from pathlib import Path
+
+    from .paper_trading import PaperTradingEngine
+
+    engine = PaperTradingEngine(data_dir=Path(args.data_dir))
+    snapshot_path = Path(args.snapshot)
+
+    if not snapshot_path.exists():
+        print(
+            json.dumps({"error": f"Snapshot not found: {args.snapshot}"}),
+            file=__import__("sys").stderr,
+        )
+        raise SystemExit(1)
+
+    result = engine.reconcile_against_snapshot(
+        snapshot_path=snapshot_path,
+        drift_threshold_usd=Decimal(str(args.drift_threshold)),
+        drift_threshold_pct=Decimal(str(args.drift_pct)),
+    )
+
+    if args.format == "json":
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        print("=" * 70)
+        print("PAPER TRADING RECONCILIATION")
+        print("=" * 70)
+        print(f"Snapshot: {result.snapshot_timestamp}")
+        print()
+        print(f"Positions Reconciled: {result.positions_reconciled}")
+        print(f"Positions with Drift: {result.positions_with_drift}")
+        print(f"Total Drift (USD):    ${result.total_drift_usd:.2f}")
+        print(f"Max Drift (%):        {result.max_drift_pct:.2f}%")
+        print()
+
+        if result.position_drifts:
+            print("--- Position Drifts ---")
+            for drift in result.position_drifts:
+                print(f"  {drift['market_slug'] or drift['token_id'][:30]}")
+                print(
+                    f"    Size: {drift['net_size']:.2f} | Drift: ${drift['drift_usd']:.2f} ({drift['drift_pct']:.2f}%)"
+                )
+
+        if result.warnings:
+            print("\n--- Warnings ---")
+            for warning in result.warnings:
+                print(f"  ! {warning}")
+
+        print("=" * 70)
+
+
+def cmd_paper_backtest(args: argparse.Namespace) -> None:
+    """Run paper trading equity calculation against all 15m snapshots."""
+    from pathlib import Path
+
+    from .paper_trading import run_equity_calculation_against_snapshots
+
+    data_dir = Path(args.data_dir)
+    snapshot_dir = Path(args.snapshot_dir)
+    output_file = Path(args.output) if args.output else None
+
+    if not snapshot_dir.exists():
+        print(
+            json.dumps({"error": f"Snapshot directory not found: {args.snapshot_dir}"}),
+            file=__import__("sys").stderr,
+        )
+        raise SystemExit(1)
+
+    summary = run_equity_calculation_against_snapshots(
+        data_dir=data_dir,
+        snapshot_dir=snapshot_dir,
+        output_file=output_file,
+    )
+
+    if "error" in summary:
+        print(json.dumps(summary, indent=2), file=__import__("sys").stderr)
+        raise SystemExit(1)
+
+    if args.format == "json":
+        print(json.dumps(summary, indent=2))
+    else:
+        print("=" * 70)
+        print("PAPER TRADING BACKTEST RESULTS")
+        print("=" * 70)
+        print(f"Snapshots Processed: {summary['snapshots_processed']}")
+        print(f"Data Points:         {summary['data_points']}")
+        print()
+        print(f"Starting Equity:     ${summary['starting_equity']:,.2f}")
+        print(f"Current Equity:      ${summary['current_equity']:,.2f}")
+        print(
+            f"Total Return:        ${summary['total_return']:,.2f} ({summary['total_return_pct']:.2f}%)"
+        )
+        print()
+        print(
+            f"Max Drawdown:        ${summary['max_drawdown']:,.2f} ({summary['max_drawdown_pct']:.2f}%)"
+        )
+        print(f"Realized PnL:        ${summary['realized_pnl']:,.2f}")
+        print(f"Unrealized PnL:      ${summary['unrealized_pnl']:,.2f}")
+        print(f"Total Fees:          ${summary['total_fees']:,.2f}")
+
+        if output_file:
+            print(f"\nEquity curve saved to: {output_file}")
+
+        print("=" * 70)
+
+
 def cmd_imbalance_backtest(args: argparse.Namespace) -> None:
     """Run orderbook imbalance strategy backtest."""
     from pathlib import Path
@@ -1667,6 +1896,71 @@ def main() -> None:
     )
     mm.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     mm.set_defaults(func=cmd_mention_scan)
+
+    # Paper trading commands
+    paper = sub.add_parser("paper", help="Paper trading commands")
+    paper_sub = paper.add_subparsers(dest="paper_cmd", required=True)
+
+    # paper record-fill
+    paper_fill = paper_sub.add_parser("record-fill", help="Record a paper trade fill")
+    paper_fill.add_argument("token_id", help="Token ID (YES/NO token)")
+    paper_fill.add_argument("side", choices=["buy", "sell"], help="Trade side")
+    paper_fill.add_argument("size", type=float, help="Number of shares")
+    paper_fill.add_argument("price", type=float, help="Execution price (0.0-1.0)")
+    paper_fill.add_argument("--fee", type=float, default=0.0, help="Trading fee")
+    paper_fill.add_argument("--market-slug", default=None, help="Market slug")
+    paper_fill.add_argument("--market-question", default=None, help="Market question")
+    paper_fill.add_argument("--data-dir", default="data/paper_trading", help="Data directory")
+    paper_fill.add_argument("--starting-cash", type=float, default=10000.0, help="Starting cash")
+    paper_fill.add_argument(
+        "--format", choices=["json", "human"], default="human", help="Output format"
+    )
+    paper_fill.set_defaults(func=cmd_paper_record_fill)
+
+    # paper positions
+    paper_pos = paper_sub.add_parser("positions", help="Show current positions")
+    paper_pos.add_argument("--data-dir", default="data/paper_trading", help="Data directory")
+    paper_pos.add_argument("--all", action="store_true", help="Show all positions including closed")
+    paper_pos.add_argument(
+        "--format", choices=["json", "human"], default="human", help="Output format"
+    )
+    paper_pos.set_defaults(func=cmd_paper_positions)
+
+    # paper equity
+    paper_eq = paper_sub.add_parser("equity", help="Show current equity")
+    paper_eq.add_argument("--data-dir", default="data/paper_trading", help="Data directory")
+    paper_eq.add_argument("--snapshot", default=None, help="Path to collector snapshot for prices")
+    paper_eq.add_argument(
+        "--format", choices=["json", "human"], default="human", help="Output format"
+    )
+    paper_eq.set_defaults(func=cmd_paper_equity)
+
+    # paper reconcile
+    paper_rec = paper_sub.add_parser("reconcile", help="Reconcile against collector snapshot")
+    paper_rec.add_argument("snapshot", help="Path to collector snapshot")
+    paper_rec.add_argument("--data-dir", default="data/paper_trading", help="Data directory")
+    paper_rec.add_argument(
+        "--drift-threshold", type=float, default=0.01, help="USD drift threshold"
+    )
+    paper_rec.add_argument(
+        "--drift-pct", type=float, default=0.01, help="Percentage drift threshold"
+    )
+    paper_rec.add_argument(
+        "--format", choices=["json", "human"], default="human", help="Output format"
+    )
+    paper_rec.set_defaults(func=cmd_paper_reconcile)
+
+    # paper backtest
+    paper_bt = paper_sub.add_parser("backtest", help="Run backtest against 15m snapshots")
+    paper_bt.add_argument("--data-dir", default="data/paper_trading", help="Data directory")
+    paper_bt.add_argument(
+        "--snapshot-dir", default="data", help="Directory with collector snapshots"
+    )
+    paper_bt.add_argument("--output", default=None, help="Output file for equity curve JSON")
+    paper_bt.add_argument(
+        "--format", choices=["json", "human"], default="human", help="Output format"
+    )
+    paper_bt.set_defaults(func=cmd_paper_backtest)
 
     args = p.parse_args()
 
