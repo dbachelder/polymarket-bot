@@ -95,8 +95,13 @@ def _extract_btc_markets(snapshots: list[dict]) -> list[dict]:
 def run_btc_preclose_paper(
     *,
     data_dir: Path,
+<<<<<<< HEAD
     window_seconds: int = 900,  # Widened from 600 to 900 (15 min window)
     cheap_price: Decimal = Decimal("0.25"),  # Temporarily widened from 0.08 to 0.25 to force fills
+=======
+    window_seconds: int = 600,  # Increased from 300 to 600 (10 min window)
+    cheap_price: Decimal = Decimal("0.08"),  # Increased from 0.05 to 0.08
+>>>>>>> origin/fix/f80d90a7
     size: Decimal = Decimal("1"),
     starting_cash: Decimal = Decimal("0"),
     snapshots_dir: Path | None = None,
@@ -144,6 +149,7 @@ def run_btc_preclose_paper(
     # Extract BTC markets
     markets = _extract_btc_markets(snapshots)
     
+<<<<<<< HEAD
     # Detailed instrumentation: log scan parameters
     logger.info(
         "BTC preclose scan starting: snapshots_dir=%s, snapshots=%d, btc_markets=%d, "
@@ -156,6 +162,8 @@ def run_btc_preclose_paper(
         size,
     )
     
+=======
+>>>>>>> origin/fix/f80d90a7
     engine = PaperTradingEngine(data_dir=data_dir, starting_cash=starting_cash)
 
     scanned = 0
@@ -192,13 +200,18 @@ def run_btc_preclose_paper(
         no_ask = _best_ask(no_book)
 
         # Log near-close detection with best asks for debugging
+<<<<<<< HEAD
         near_close_entry = {
+=======
+        near_close_log.append({
+>>>>>>> origin/fix/f80d90a7
             "market_slug": m.get("slug", "unknown"),
             "question": m.get("question", ""),
             "time_to_close_seconds": round(ttc, 3),
             "yes_ask": str(yes_ask) if yes_ask else None,
             "no_ask": str(no_ask) if no_ask else None,
             "timestamp": now.isoformat(),
+<<<<<<< HEAD
         }
         near_close_log.append(near_close_entry)
         
@@ -213,6 +226,9 @@ def run_btc_preclose_paper(
                 no_ask,
                 cheap_price,
             )
+=======
+        })
+>>>>>>> origin/fix/f80d90a7
 
         token_id = None
         side_label = None
@@ -261,6 +277,7 @@ def run_btc_preclose_paper(
             )
 
     # Log near-close detections for debugging
+<<<<<<< HEAD
     logger.info(
         "BTC preclose summary: scanned=%d, near_close=%d, fills=%d, window=%ds, cheap_price=%s",
         scanned,
@@ -278,6 +295,17 @@ def run_btc_preclose_paper(
                 entry["yes_ask"],
                 entry["no_ask"],
             )
+=======
+    if near_close_log:
+        logger.info(
+            "BTC preclose scanned %d markets, %d near close, %d fills",
+            scanned,
+            near_close,
+            fills,
+        )
+        for entry in near_close_log[:5]:  # Log first 5 for brevity
+            logger.debug("Near-close: %s", entry)
+>>>>>>> origin/fix/f80d90a7
 
     return {
         "timestamp": now.isoformat(),
@@ -295,8 +323,13 @@ def run_btc_preclose_paper(
 def run_btc_preclose_loop(
     *,
     data_dir: Path,
+<<<<<<< HEAD
     window_seconds: int = 900,  # Widened from 600 to 900 (15 min window)
     cheap_price: Decimal = Decimal("0.25"),  # Temporarily widened from 0.08 to 0.25 to force fills
+=======
+    window_seconds: int = 600,
+    cheap_price: Decimal = Decimal("0.08"),
+>>>>>>> origin/fix/f80d90a7
     size: Decimal = Decimal("1"),
     starting_cash: Decimal = Decimal("0"),
     loop_duration_minutes: int = 10,
