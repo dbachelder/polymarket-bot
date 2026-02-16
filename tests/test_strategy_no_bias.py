@@ -485,6 +485,187 @@ class TestNoBiasPosition:
         assert position.pnl is not None
         assert position.pnl < 0
 
+    def test_position_to_dict(self) -> None:
+        """Test serializing open position to dict."""
+        position = NoBiasPosition(
+            position_id="test-123",
+            timestamp=datetime(2026, 2, 15, 12, 0, 0, tzinfo=UTC),
+            market_id="market-456",
+            token_id="no-token",
+            market_question="Will Kanye run?",
+            vertical=MarketVertical.POLITICS,
+            entry_no_price=0.90,
+            position_size_usd=500,
+            expected_edge=0.10,
+        )
+
+        data = position.to_dict()
+
+        assert data["position_id"] == "test-123"
+        assert data["market_id"] == "market-456"
+        assert data["token_id"] == "no-token"
+        assert data["market_question"] == "Will Kanye run?"
+        assert data["vertical"] == "politics"
+        assert data["entry_no_price"] == 0.90
+        assert data["position_size_usd"] == 500
+        assert data["expected_edge"] == 0.10
+        assert data["exit_price"] is None
+        assert data["exit_timestamp"] is None
+        assert data["exit_reason"] is None
+        assert data["pnl"] is None
+        assert data["settled"] is False
+        assert data["timestamp"] == "2026-02-15T12:00:00+00:00"
+
+    def test_position_to_dict_closed(self) -> None:
+        """Test serializing closed position to dict."""
+        position = NoBiasPosition(
+            position_id="test-123",
+            timestamp=datetime(2026, 2, 15, 12, 0, 0, tzinfo=UTC),
+            market_id="market-456",
+            token_id="no-token",
+            market_question="Will Kanye run?",
+            vertical=MarketVertical.POLITICS,
+            entry_no_price=0.90,
+            position_size_usd=500,
+            expected_edge=0.10,
+        )
+        position.close(exit_price=0.95, reason="edge_gone", timestamp=datetime(2026, 2, 16, 12, 0, 0, tzinfo=UTC))
+
+        data = position.to_dict()
+
+        assert data["exit_price"] == 0.95
+        assert data["exit_timestamp"] == "2026-02-16T12:00:00+00:00"
+        assert data["exit_reason"] == "edge_gone"
+        assert data["pnl"] is not None
+        assert data["pnl"] > 0
+
+    def test_position_from_dict_open(self) -> None:
+        """Test deserializing open position from dict."""
+        data = {
+            "position_id": "test-123",
+            "timestamp": "2026-02-15T12:00:00+00:00",
+            "market_id": "market-456",
+            "token_id": "no-token",
+            "market_question": "Will Kanye run?",
+            "vertical": "politics",
+            "entry_no_price": 0.90,
+            "position_size_usd": 500,
+            "expected_edge": 0.10,
+            "exit_price": None,
+            "exit_timestamp": None,
+            "exit_reason": None,
+            "pnl": None,
+            "settled": False,
+        }
+
+        position = NoBiasPosition.from_dict(data)
+
+        assert position.position_id == "test-123"
+        assert position.market_id == "market-456"
+        assert position.token_id == "no-token"
+        assert position.market_question == "Will Kanye run?"
+        assert position.vertical == MarketVertical.POLITICS
+        assert position.entry_no_price == 0.90
+        assert position.position_size_usd == 500
+        assert position.expected_edge == 0.10
+        assert position.is_open
+        assert position.exit_price is None
+        assert position.exit_timestamp is None
+        assert position.exit_reason is None
+        assert position.pnl is None
+        assert not position.settled
+        assert position.timestamp == datetime(2026, 2, 15, 12, 0, 0, tzinfo=UTC)
+
+    def test_position_from_dict_closed(self) -> None:
+        """Test deserializing closed position from dict."""
+        data = {
+            "position_id": "test-123",
+            "timestamp": "2026-02-15T12:00:00+00:00",
+            "market_id": "market-456",
+            "token_id": "no-token",
+            "market_question": "Will Kanye run?",
+            "vertical": "politics",
+            "entry_no_price": 0.90,
+            "position_size_usd": 500,
+            "expected_edge": 0.10,
+            "exit_price": 0.95,
+            "exit_timestamp": "2026-02-16T12:00:00+00:00",
+            "exit_reason": "edge_gone",
+            "pnl": 27.78,
+            "settled": False,
+        }
+
+        position = NoBiasPosition.from_dict(data)
+
+        assert not position.is_open
+        assert position.exit_price == 0.95
+        assert position.exit_timestamp == datetime(2026, 2, 16, 12, 0, 0, tzinfo=UTC)
+        assert position.exit_reason == "edge_gone"
+        assert position.pnl == 27.78
+        assert not position.settled
+
+    def test_position_from_dict_settled(self) -> None:
+        """Test deserializing settled position from dict."""
+        data = {
+            "position_id": "test-123",
+            "timestamp": "2026-02-15T12:00:00+00:00",
+            "market_id": "market-456",
+            "token_id": "no-token",
+            "market_question": "Will Kanye run?",
+            "vertical": "politics",
+            "entry_no_price": 0.90,
+            "position_size_usd": 500,
+            "expected_edge": 0.10,
+            "exit_price": 1.0,
+            "exit_timestamp": "2026-02-20T12:00:00+00:00",
+            "exit_reason": "settlement_no_wins",
+            "pnl": 55.56,
+            "settled": True,
+        }
+
+        position = NoBiasPosition.from_dict(data)
+
+        assert not position.is_open
+        assert position.settled
+        assert position.exit_price == 1.0
+        assert position.exit_reason == "settlement_no_wins"
+        assert position.pnl == 55.56
+
+    def test_position_roundtrip(self) -> None:
+        """Test full serialization roundtrip."""
+        original = NoBiasPosition(
+            position_id="test-123",
+            timestamp=datetime(2026, 2, 15, 12, 0, 0, tzinfo=UTC),
+            market_id="market-456",
+            token_id="no-token",
+            market_question="Will Kanye run?",
+            vertical=MarketVertical.POLITICS,
+            entry_no_price=0.90,
+            position_size_usd=500,
+            expected_edge=0.10,
+        )
+        original.close(exit_price=0.95, reason="test_exit", timestamp=datetime(2026, 2, 16, 12, 0, 0, tzinfo=UTC))
+
+        # Serialize and deserialize
+        data = original.to_dict()
+        restored = NoBiasPosition.from_dict(data)
+
+        # Verify all fields match
+        assert restored.position_id == original.position_id
+        assert restored.timestamp == original.timestamp
+        assert restored.market_id == original.market_id
+        assert restored.token_id == original.token_id
+        assert restored.market_question == original.market_question
+        assert restored.vertical == original.vertical
+        assert restored.entry_no_price == original.entry_no_price
+        assert restored.position_size_usd == original.position_size_usd
+        assert restored.expected_edge == original.expected_edge
+        assert restored.exit_price == original.exit_price
+        assert restored.exit_timestamp == original.exit_timestamp
+        assert restored.exit_reason == original.exit_reason
+        assert restored.pnl == original.pnl
+        assert restored.settled == original.settled
+
 
 class TestNoBiasTracker:
     """Test NoBiasTracker."""
@@ -602,6 +783,137 @@ class TestNoBiasTracker:
         assert summary["total_trades"] == 2
         assert summary["win_rate"] == 0.5
         assert "by_vertical" in summary
+
+    def test_tracker_persistence_roundtrip(self, tmp_path: Path) -> None:
+        """Test that positions survive save/load roundtrip."""
+        data_dir = tmp_path / "no_bias"
+
+        # Create tracker and add positions
+        tracker1 = NoBiasTracker(data_dir=data_dir, max_positions_per_vertical=3)
+
+        # Add open position
+        signal1 = NoBiasSignal(
+            timestamp=datetime(2026, 2, 15, 12, 0, 0, tzinfo=UTC),
+            market_id="open-market",
+            token_id_yes="yes1",
+            token_id_no="no1",
+            market_question="Will Kanye run?",
+            vertical=MarketVertical.POLITICS,
+            yes_ask=0.10,
+            no_bid=0.90,
+            base_rate=0.02,
+            mispricing_ratio=5.0,
+            edge=0.10,
+            confidence=0.7,
+            volume_usd=50000,
+            time_to_resolution=None,
+            reasoning="Test",
+        )
+        pos1 = tracker1.open_position(signal1, bankroll=10000, dry_run=True)
+        assert pos1 is not None
+
+        # Add closed position
+        signal2 = NoBiasSignal(
+            timestamp=datetime(2026, 2, 14, 12, 0, 0, tzinfo=UTC),
+            market_id="closed-market",
+            token_id_yes="yes2",
+            token_id_no="no2",
+            market_question="Will aliens visit?",
+            vertical=MarketVertical.SPACE,
+            yes_ask=0.05,
+            no_bid=0.95,
+            base_rate=0.001,
+            mispricing_ratio=50.0,
+            edge=0.15,
+            confidence=0.8,
+            volume_usd=30000,
+            time_to_resolution=None,
+            reasoning="Test",
+        )
+        pos2 = tracker1.open_position(signal2, bankroll=10000, dry_run=True)
+        assert pos2 is not None
+        pos2.close(exit_price=0.98, reason="test_exit", timestamp=datetime(2026, 2, 15, 12, 0, 0, tzinfo=UTC))
+
+        # Force save
+        tracker1._save_positions()
+
+        # Verify file was created
+        positions_file = data_dir / "positions.json"
+        assert positions_file.exists()
+
+        # Create new tracker instance pointing to same directory
+        tracker2 = NoBiasTracker(data_dir=data_dir, max_positions_per_vertical=3)
+
+        # Verify positions were restored
+        assert len(tracker2.positions) == 2
+
+        # Verify open position
+        restored_open = tracker2.positions.get(pos1.position_id)
+        assert restored_open is not None
+        assert restored_open.is_open
+        assert restored_open.market_id == "open-market"
+        assert restored_open.vertical == MarketVertical.POLITICS
+        assert restored_open.entry_no_price == 0.90
+        assert restored_open.position_size_usd == pos1.position_size_usd
+        # Timestamp is set to now() when position is created, not signal timestamp
+        assert restored_open.timestamp == pos1.timestamp
+
+        # Verify closed position
+        restored_closed = tracker2.positions.get(pos2.position_id)
+        assert restored_closed is not None
+        assert not restored_closed.is_open
+        assert restored_closed.market_id == "closed-market"
+        assert restored_closed.vertical == MarketVertical.SPACE
+        assert restored_closed.exit_price == 0.98
+        assert restored_closed.exit_reason == "test_exit"
+        assert restored_closed.exit_timestamp == datetime(2026, 2, 15, 12, 0, 0, tzinfo=UTC)
+        assert restored_closed.pnl is not None
+
+        # Verify open positions list
+        open_positions = tracker2.get_open_positions()
+        assert len(open_positions) == 1
+        assert open_positions[0].position_id == pos1.position_id
+
+    def test_tracker_persistence_with_settled_position(self, tmp_path: Path) -> None:
+        """Test that settled positions are correctly persisted and restored."""
+        data_dir = tmp_path / "no_bias"
+
+        # Create tracker with settled position
+        tracker1 = NoBiasTracker(data_dir=data_dir, max_positions_per_vertical=3)
+
+        signal = NoBiasSignal(
+            timestamp=datetime(2026, 2, 15, 12, 0, 0, tzinfo=UTC),
+            market_id="settled-market",
+            token_id_yes="yes1",
+            token_id_no="no1",
+            market_question="Will Kanye run?",
+            vertical=MarketVertical.POLITICS,
+            yes_ask=0.10,
+            no_bid=0.90,
+            base_rate=0.02,
+            mispricing_ratio=5.0,
+            edge=0.10,
+            confidence=0.7,
+            volume_usd=50000,
+            time_to_resolution=None,
+            reasoning="Test",
+        )
+        pos = tracker1.open_position(signal, bankroll=10000, dry_run=True)
+        assert pos is not None
+        pos.settle(no_wins=True, timestamp=datetime(2026, 2, 20, 12, 0, 0, tzinfo=UTC))
+
+        tracker1._save_positions()
+
+        # Create new tracker and verify
+        tracker2 = NoBiasTracker(data_dir=data_dir, max_positions_per_vertical=3)
+
+        restored = tracker2.positions.get(pos.position_id)
+        assert restored is not None
+        assert not restored.is_open
+        assert restored.settled
+        assert restored.exit_price == 1.0
+        assert restored.exit_reason == "settlement_no_wins"
+        assert restored.pnl is not None and restored.pnl > 0
 
 
 class TestGetNoBiasPerformance:

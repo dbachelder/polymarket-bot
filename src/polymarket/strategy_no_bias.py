@@ -299,6 +299,45 @@ class NoBiasPosition:
         self.close(settlement_price, reason, ts)
         object.__setattr__(self, "settled", True)
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert position to dictionary for JSON serialization."""
+        return {
+            "position_id": self.position_id,
+            "timestamp": self.timestamp.isoformat(),
+            "market_id": self.market_id,
+            "token_id": self.token_id,
+            "market_question": self.market_question,
+            "vertical": self.vertical.value,
+            "entry_no_price": self.entry_no_price,
+            "position_size_usd": self.position_size_usd,
+            "expected_edge": self.expected_edge,
+            "exit_price": self.exit_price,
+            "exit_timestamp": self.exit_timestamp.isoformat() if self.exit_timestamp else None,
+            "exit_reason": self.exit_reason,
+            "pnl": self.pnl,
+            "settled": self.settled,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "NoBiasPosition":
+        """Reconstruct position from dictionary."""
+        return cls(
+            position_id=data["position_id"],
+            timestamp=datetime.fromisoformat(data["timestamp"]),
+            market_id=data["market_id"],
+            token_id=data["token_id"],
+            market_question=data["market_question"],
+            vertical=MarketVertical(data["vertical"]),
+            entry_no_price=data["entry_no_price"],
+            position_size_usd=data["position_size_usd"],
+            expected_edge=data["expected_edge"],
+            exit_price=data.get("exit_price"),
+            exit_timestamp=datetime.fromisoformat(data["exit_timestamp"]) if data.get("exit_timestamp") else None,
+            exit_reason=data.get("exit_reason"),
+            pnl=data.get("pnl"),
+            settled=data.get("settled", False),
+        )
+
 
 @dataclass
 class NoBiasScanResult:
@@ -683,8 +722,14 @@ class NoBiasTracker:
         if positions_file.exists():
             try:
                 data = json.loads(positions_file.read_text())
-                # Reconstruct positions (simplified)
-                logger.info("Loaded %d positions from %s", len(data), positions_file)
+                # Reconstruct positions from saved data
+                positions_data = data.get("positions", {})
+                for pid, pos_data in positions_data.items():
+                    try:
+                        self.positions[pid] = NoBiasPosition.from_dict(pos_data)
+                    except (KeyError, ValueError, TypeError) as e:
+                        logger.warning("Failed to load position %s: %s", pid, e)
+                logger.info("Loaded %d positions from %s", len(self.positions), positions_file)
             except (json.JSONDecodeError, KeyError) as e:
                 logger.warning("Failed to load positions: %s", e)
 
@@ -694,14 +739,7 @@ class NoBiasTracker:
         data = {
             "saved_at": datetime.now(UTC).isoformat(),
             "positions": {
-                pid: {
-                    "market_id": pos.market_id,
-                    "vertical": pos.vertical.value,
-                    "entry_price": pos.entry_no_price,
-                    "position_size": pos.position_size_usd,
-                    "is_open": pos.is_open,
-                    "pnl": pos.pnl,
-                }
+                pid: pos.to_dict()
                 for pid, pos in self.positions.items()
             },
         }
