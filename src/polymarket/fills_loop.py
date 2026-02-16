@@ -6,11 +6,9 @@ This ensures fills.jsonl stays current even when pnl-loop has window logic issue
 
 from __future__ import annotations
 
-import json
 import logging
 import random
 import time
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -36,6 +34,7 @@ def _send_openclaw_notification(message: str) -> None:
     try:
         # Try to import and use OpenClaw messaging
         from openclaw.messaging import send_notification
+
         send_notification(message)
     except Exception:
         # Fallback: just log prominently

@@ -206,9 +206,7 @@ class TestRunCollectFillsLoop:
     @patch("polymarket.fills_loop.time.sleep")
     @patch("polymarket.fills_loop.time.time")
     @patch("polymarket.fills_loop._send_openclaw_notification")
-    def test_stale_alert_triggered(
-        self, mock_notify, mock_time, mock_sleep, mock_collect_fills
-    ):
+    def test_stale_alert_triggered(self, mock_notify, mock_time, mock_sleep, mock_collect_fills):
         """Test that stale alert is triggered when fills are old."""
         with tempfile.TemporaryDirectory() as tmpdir:
             data_dir = Path(tmpdir)
