@@ -153,6 +153,7 @@ def cmd_btc_preclose_paper(args: argparse.Namespace) -> None:
         cheap_price=cheap_price,
         size=Decimal(str(args.size)),
         starting_cash=Decimal(str(args.starting_cash)),
+        snapshots_dir=Path(args.snapshots_dir) if args.snapshots_dir else None,
     )
 
     if args.format == "json":
@@ -200,6 +201,7 @@ def cmd_btc_preclose_paper_loop(args: argparse.Namespace) -> None:
         starting_cash=Decimal(str(args.starting_cash)),
         loop_duration_minutes=int(args.loop_duration_minutes),
         interval_seconds=int(args.interval_seconds),
+        snapshots_dir=Path(args.snapshots_dir) if args.snapshots_dir else None,
     )
 
     if args.format == "json":
@@ -3065,6 +3067,7 @@ def main() -> None:
     btcpc.add_argument("--cheap-price", type=float, default=0.05, help="Cheap price threshold (default: 0.05)")
     btcpc.add_argument("--size", type=float, default=1.0)
     btcpc.add_argument("--starting-cash", type=float, default=0.0)
+    btcpc.add_argument("--snapshots-dir", default="data", help="Directory containing 5m snapshot files (default: data)")
     btcpc.add_argument("--use-monitor-thresholds", action="store_true", help="Use auto-adjusted thresholds from fills monitor")
     btcpc.add_argument("--format", choices=["json", "human"], default="human")
     btcpc.set_defaults(func=cmd_btc_preclose_paper)
@@ -3081,6 +3084,7 @@ def main() -> None:
     btcpl.add_argument("--starting-cash", type=float, default=0.0)
     btcpl.add_argument("--loop-duration-minutes", type=int, default=10, help="How long to run (default: 10 min)")
     btcpl.add_argument("--interval-seconds", type=int, default=60, help="Seconds between scans (default: 60)")
+    btcpl.add_argument("--snapshots-dir", default="data", help="Directory containing 5m snapshot files (default: data)")
     btcpl.add_argument("--use-monitor-thresholds", action="store_true", help="Use auto-adjusted thresholds from fills monitor")
     btcpl.add_argument("--format", choices=["json", "human"], default="human")
     btcpl.set_defaults(func=cmd_btc_preclose_paper_loop)
