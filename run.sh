@@ -50,6 +50,10 @@ case "${1:-}" in
         shift
         $PYTHON -m polymarket.cli collect-fills "$@"
         ;;
+    collect-fills-loop)
+        shift
+        $PYTHON -m polymarket.cli collect-fills-loop "$@"
+        ;;
     pnl-loop)
         shift
         $PYTHON -m polymarket.cli pnl-loop "$@"
@@ -132,6 +136,7 @@ case "${1:-}" in
         echo "  tests              Run pytest test suite"
         echo "  health-check       Check collector health and staleness"
         echo "  collect-fills      Collect fills from paper + real account"
+        echo "  collect-fills-loop Continuously collect fills with staleness alerts"
         echo "  pnl-loop           Run PnL collection/verification loop"
         echo "  pnl-health         Check fills and PnL data health"
         echo "  pnl-sanity-check   Run NAV/PnL sanity check (detect impossible jumps)"
@@ -156,6 +161,7 @@ case "${1:-}" in
         echo ""
         echo "Examples:"
         echo "  $0 collect-15m-loop --out data --interval-seconds 60"
+        echo "  $0 collect-fills-loop --interval-seconds 300 --stale-alert-hours 6"
         echo "  $0 markets-15m --limit 20"
         echo "  $0 pnl-verify --input data/fills.json --books data/books.json"
         exit 1
