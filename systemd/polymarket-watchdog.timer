@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Polymarket Bot Collector Watchdog every 30 seconds
+
+[Timer]
+# Run 10 seconds after boot, then every 30 seconds
+OnBootSec=10
+OnUnitActiveSec=30s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

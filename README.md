@@ -87,12 +87,13 @@ When running from cron, use the full path to the polymarket-bot venv:
 * * * * * cd /home/dan/src/polymarket-bot && /home/dan/src/polymarket-bot/.venv/bin/python -m polymarket.cli collect-15m-loop --interval-seconds 60 --max-backoff-seconds 60 >> /tmp/polymarket-collector.log 2>&1
 ```
 
-Or use the run.sh script:
+Or use the run.sh script (recommended - handles venv automatically):
 
 ```bash
 * * * * * cd /home/dan/src/polymarket-bot && ./run.sh collect-15m-loop --interval-seconds 60 >> /tmp/polymarket-collector.log 2>&1
 ```
 
+See [docs/ops.md](docs/ops.md) for complete cron setup, monitoring, and troubleshooting.
 ### All Available Commands
 
 Run `./run.sh` without arguments to see the full list of commands.
