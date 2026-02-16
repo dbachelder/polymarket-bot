@@ -294,8 +294,8 @@ class TestGenerateSignals:
         signal = signals[0]
         assert signal.side == "no_trade"
 
-    def test_skips_missing_city(self) -> None:
-        """Test that markets without identified cities are skipped."""
+    def test_generates_signals_for_cheap_sides_without_city(self) -> None:
+        """Test that cheap sides generate signals even without city identification."""
         market = WeatherMarket(
             market_id="123",
             token_id_yes="yes_token",
@@ -306,16 +306,19 @@ class TestGenerateSignals:
             market_end_date=datetime.now(UTC),
             threshold_temp=70.0,
             condition="above",
-            current_yes_price=0.10,
+            current_yes_price=0.10,  # Cheap side
         )
 
         consensus = self.create_consensus(high_temp=80.0)
 
         signals = generate_signals([market], {"nyc": consensus})
-        assert len(signals) == 0
+        # With loosened thresholds, cheap sides generate signals even without city/consensus
+        assert len(signals) == 1
+        # When YES is cheap (< 0.15), the NO side is expensive (> 0.85), so we buy NO
+        assert signals[0].side == "buy_no"
 
-    def test_skips_missing_consensus(self) -> None:
-        """Test that markets without consensus are skipped."""
+    def test_generates_signals_for_cheap_sides_without_consensus(self) -> None:
+        """Test that cheap sides generate signals even without consensus data."""
         market = WeatherMarket(
             market_id="123",
             token_id_yes="yes_token",
@@ -326,14 +329,17 @@ class TestGenerateSignals:
             market_end_date=datetime.now(UTC),
             threshold_temp=70.0,
             condition="above",
-            current_yes_price=0.10,
+            current_yes_price=0.10,  # Cheap side
         )
 
         # Only have consensus for NYC, not Chicago
         consensus = self.create_consensus(high_temp=80.0)
 
         signals = generate_signals([market], {"nyc": consensus})
-        assert len(signals) == 0
+        # With loosened thresholds, cheap sides generate signals even without consensus
+        assert len(signals) == 1
+        # When YES is cheap (< 0.15), the NO side is expensive (> 0.85), so we buy NO
+        assert signals[0].side == "buy_no"
 
 
 class TestWeatherSignal:
