@@ -7,6 +7,9 @@ Commands:
 - trader nav: Show NAV for a specific trader
 - copy sync: Sync and copy trades from top traders
 - copy status: Show copy trading performance
+- leaderboard build: Build leaderboard from fills
+- leaderboard show: Show leaderboard
+- leaderboard candidates: Select copy trading candidates
 """
 
 from __future__ import annotations
@@ -339,6 +342,165 @@ def cmd_copy_config(args: argparse.Namespace) -> None:
         print("=" * 70)
 
 
+def cmd_leaderboard_build(args: argparse.Namespace) -> None:
+    """Build trader leaderboard from fill data."""
+    from pathlib import Path
+
+    from polymarket.trader_leaderboard import TraderLeaderboardBuilder
+
+    fills_dir = Path(args.fills_dir)
+    builder = TraderLeaderboardBuilder(data_dir=args.data_dir)
+
+    print(f"Building leaderboard from fills in {fills_dir}...")
+
+    leaderboard = builder.build_from_fills(
+        fills_dir=fills_dir,
+        min_trades=args.min_trades,
+        min_volume=Decimal(str(args.min_volume)),
+    )
+
+    # Save leaderboard
+    builder.save_leaderboard(leaderboard)
+
+    if args.format == "json":
+        print(json.dumps(leaderboard.to_dict(), indent=2))
+    else:
+        print("=" * 90)
+        print("TRADER LEADERBOARD (from fills)")
+        print("=" * 90)
+        print(f"Generated: {leaderboard.generated_at}")
+        print(f"Filters: min_trades={args.min_trades}, min_volume=${args.min_volume:,.0f}")
+        print(f"Traders ranked: {len(leaderboard.entries)}")
+        print()
+
+        if leaderboard.entries:
+            print(f"{'Rank':<6}{'Address':<44}{'PnL':<12}{'Volume':<15}{'Win%':<8}{'Trades':<8}")
+            print("-" * 90)
+
+            for entry in leaderboard.entries[:args.limit]:
+                stats = entry.stats
+                addr_short = stats.address[:40] + "..."
+                pnl = f"${float(stats.realized_pnl):,.0f}"
+                vol = f"${float(stats.total_volume)/1e6:.1f}M"
+                win_pct = f"{stats.win_rate:.0f}%"
+                trades = str(stats.total_trades)
+                print(f"{entry.rank:<6}{addr_short:<44}{pnl:<12}{vol:<15}{win_pct:<8}{trades:<8}")
+
+            if len(leaderboard.entries) > args.limit:
+                print(f"\n... and {len(leaderboard.entries) - args.limit} more traders")
+
+        print("=" * 90)
+
+
+def cmd_leaderboard_show(args: argparse.Namespace) -> None:
+    """Show existing leaderboard."""
+    from polymarket.trader_leaderboard import TraderLeaderboardBuilder
+
+    builder = TraderLeaderboardBuilder(data_dir=args.data_dir)
+    leaderboard = builder.load_leaderboard()
+
+    if not leaderboard:
+        print("No leaderboard found. Run 'trader leaderboard build' first.")
+        return
+
+    if args.format == "json":
+        print(json.dumps(leaderboard.to_dict(), indent=2))
+    else:
+        print("=" * 90)
+        print("TRADER LEADERBOARD")
+        print("=" * 90)
+        print(f"Generated: {leaderboard.generated_at}")
+        print(f"Traders: {len(leaderboard.entries)}")
+        print()
+
+        # Show top by composite score
+        print("--- Top Traders (Composite Score) ---")
+        print(f"{'Rank':<6}{'Address':<44}{'Score':<10}{'PnL':<12}{'Volume':<15}{'Win%':<8}")
+        print("-" * 90)
+
+        for entry in leaderboard.entries[:args.limit]:
+            stats = entry.stats
+            addr_short = stats.address[:40] + "..."
+            score = f"{entry.composite_score:.2f}"
+            pnl = f"${float(stats.realized_pnl):,.0f}"
+            vol = f"${float(stats.total_volume)/1e6:.1f}M"
+            win_pct = f"{stats.win_rate:.0f}%"
+            print(f"{entry.rank:<6}{addr_short:<44}{score:<10}{pnl:<12}{vol:<15}{win_pct:<8}")
+
+        print()
+        print("--- Top by PnL ---")
+        for entry in leaderboard.get_top_by_pnl(args.top_n):
+            stats = entry.stats
+            print(f"  #{entry.pnl_rank} {stats.address[:40]}... ${float(stats.realized_pnl):,.0f}")
+
+        print()
+        print("--- Top by Volume ---")
+        for entry in leaderboard.get_top_by_volume(args.top_n):
+            stats = entry.stats
+            print(f"  #{entry.volume_rank} {stats.address[:40]}... ${float(stats.total_volume)/1e6:.1f}M")
+
+        print()
+        print("--- Top by Win Rate ---")
+        for entry in leaderboard.get_top_by_win_rate(args.top_n, min_trades=10):
+            stats = entry.stats
+            print(f"  #{entry.win_rate_rank} {stats.address[:40]}... {stats.win_rate:.1f}% ({stats.win_count}/{stats.total_trades})")
+
+        print("=" * 90)
+
+
+def cmd_leaderboard_candidates(args: argparse.Namespace) -> None:
+    """Select copy trading candidates from leaderboard."""
+    from polymarket.trader_leaderboard import TraderLeaderboardBuilder
+
+    builder = TraderLeaderboardBuilder(data_dir=args.data_dir)
+    leaderboard = builder.load_leaderboard()
+
+    if not leaderboard:
+        print("No leaderboard found. Run 'trader leaderboard build' first.")
+        return
+
+    candidates = builder.select_candidates(
+        leaderboard=leaderboard,
+        top_n=args.top_n,
+        min_win_rate=args.min_win_rate,
+        min_trades=args.min_trades,
+        require_positive_pnl=args.require_positive_pnl,
+    )
+
+    # Save candidates
+    builder.save_candidates(candidates)
+
+    if args.format == "json":
+        output = {
+            "candidates": [c.to_dict() for c in candidates],
+            "count": len(candidates),
+        }
+        print(json.dumps(output, indent=2))
+    else:
+        print("=" * 90)
+        print("COPY TRADING CANDIDATES")
+        print("=" * 90)
+        print(f"Selected: {len(candidates)} candidates")
+        print()
+
+        for i, candidate in enumerate(candidates, 1):
+            stats = candidate.stats
+            print(f"#{i} {stats.address}")
+            print(f"  Realized PnL:     ${float(stats.realized_pnl):,.2f}")
+            print(f"  Net PnL (after fees): ${float(stats.net_pnl):,.2f}")
+            print(f"  Volume:           ${float(stats.total_volume)/1e6:.2f}M")
+            print(f"  Win Rate:         {stats.win_rate:.1f}% ({stats.win_count}W/{stats.loss_count}L)")
+            print(f"  Trades:           {stats.total_trades}")
+            print(f"  Avg Trade PnL:    ${float(stats.avg_trade_pnl):,.2f}")
+            print(f"  Markets:          {stats.markets_traded}")
+            print(f"  Recommended Size: ${float(candidate.recommended_position_size):,.2f}")
+            print(f"  Selection Score:  {candidate.selection_score:.3f}")
+            print(f"  Rationale:        {', '.join(candidate.selection_reason)}")
+            print()
+
+        print("=" * 90)
+
+
 def add_trader_commands(subparsers) -> None:
     """Add trader profiling commands to CLI."""
     # Main trader command
@@ -543,3 +705,117 @@ def add_trader_commands(subparsers) -> None:
         help="Output format (default: human)",
     )
     c_config.set_defaults(func=cmd_copy_config)
+
+    # Leaderboard command
+    lb = subparsers.add_parser("leaderboard", help="Trader leaderboard from fills")
+    lb_sub = lb.add_subparsers(dest="leaderboard_cmd", required=True)
+
+    # leaderboard build
+    lb_build = lb_sub.add_parser("build", help="Build leaderboard from fill data")
+    lb_build.add_argument(
+        "--fills-dir",
+        default="data/trader_profiles/fills",
+        help="Directory containing trader fill files (default: data/trader_profiles/fills)",
+    )
+    lb_build.add_argument(
+        "--data-dir",
+        default="data/trader_leaderboard",
+        help="Leaderboard data directory (default: data/trader_leaderboard)",
+    )
+    lb_build.add_argument(
+        "--min-trades",
+        type=int,
+        default=5,
+        help="Minimum trades required for ranking (default: 5)",
+    )
+    lb_build.add_argument(
+        "--min-volume",
+        type=float,
+        default=1000.0,
+        help="Minimum volume required for ranking (default: 1000)",
+    )
+    lb_build.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Maximum traders to display (default: 20)",
+    )
+    lb_build.add_argument(
+        "--format",
+        choices=["json", "human"],
+        default="human",
+        help="Output format (default: human)",
+    )
+    lb_build.set_defaults(func=cmd_leaderboard_build)
+
+    # leaderboard show
+    lb_show = lb_sub.add_parser("show", help="Show existing leaderboard")
+    lb_show.add_argument(
+        "--data-dir",
+        default="data/trader_leaderboard",
+        help="Leaderboard data directory (default: data/trader_leaderboard)",
+    )
+    lb_show.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Maximum traders to display (default: 20)",
+    )
+    lb_show.add_argument(
+        "--top-n",
+        type=int,
+        default=5,
+        help="Number of top traders per category (default: 5)",
+    )
+    lb_show.add_argument(
+        "--format",
+        choices=["json", "human"],
+        default="human",
+        help="Output format (default: human)",
+    )
+    lb_show.set_defaults(func=cmd_leaderboard_show)
+
+    # leaderboard candidates
+    lb_cand = lb_sub.add_parser("candidates", help="Select copy trading candidates")
+    lb_cand.add_argument(
+        "--data-dir",
+        default="data/trader_leaderboard",
+        help="Leaderboard data directory (default: data/trader_leaderboard)",
+    )
+    lb_cand.add_argument(
+        "--top-n",
+        type=int,
+        default=5,
+        help="Number of candidates to select (default: 5)",
+    )
+    lb_cand.add_argument(
+        "--min-win-rate",
+        type=float,
+        default=40.0,
+        help="Minimum win rate percentage (default: 40)",
+    )
+    lb_cand.add_argument(
+        "--min-trades",
+        type=int,
+        default=10,
+        help="Minimum trades required (default: 10)",
+    )
+    lb_cand.add_argument(
+        "--require-positive-pnl",
+        action="store_true",
+        default=True,
+        help="Only select traders with positive PnL (default: True)",
+    )
+    lb_cand.add_argument(
+        "--no-require-positive-pnl",
+        action="store_false",
+        dest="require_positive_pnl",
+        help="Allow traders with negative PnL",
+    )
+    lb_cand.add_argument(
+        "--format",
+        choices=["json", "human"],
+        default="human",
+        help="Output format (default: human)",
+    )
+    lb_cand.set_defaults(func=cmd_leaderboard_candidates)
