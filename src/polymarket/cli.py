@@ -197,6 +197,8 @@ def cmd_btc_preclose_paper_loop(args: argparse.Namespace) -> None:
         data_dir=Path(args.data_dir),
         window_seconds=window_seconds,
         cheap_price=cheap_price,
+        fair_price_threshold=Decimal(str(args.fair_price_threshold)),
+        wide_spread_threshold=Decimal(str(args.wide_spread_threshold)),
         size=Decimal(str(args.size)),
         starting_cash=Decimal(str(args.starting_cash)),
         loop_duration_minutes=int(args.loop_duration_minutes),
