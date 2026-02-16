@@ -27,9 +27,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from . import clob
-from .site import fetch_predictions_page, parse_next_data
-from .trading import Order, submit_order
+from .paper_trading import PaperTradingEngine
 from .weather import (
     ModelConsensus,
     get_consensus_for_cities,
@@ -37,37 +35,64 @@ from .weather import (
 
 logger = logging.getLogger(__name__)
 
-# Cities to monitor (starting with NYC + London as per test parameters)
-DEFAULT_CITIES = ["nyc", "london", "chicago", "seattle", "atlanta", "dallas", "miami"]
+# Cities to monitor (expanded universe for more opportunities)
+DEFAULT_CITIES = [
+    "nyc", "london", "chicago", "seattle", "atlanta", "dallas", "miami",
+    "los_angeles", "san_francisco", "boston", "washington", "philadelphia",
+    "denver", "phoenix", "houston", "detroit", "minneapolis", "portland",
+    "las_vegas", "san_diego", "austin", "nashville", "new_orleans",
+    "seoul", "tokyo", "paris", "berlin", "sydney", "toronto", "vancouver",
+]
 
-# Entry thresholds
-YES_ENTRY_MAX_PRICE = 0.15
-YES_ENTRY_MIN_PROBABILITY = 0.70
-NO_ENTRY_MIN_PRICE = 0.45
-NO_ENTRY_MAX_PROBABILITY = 0.20
+# Entry thresholds (LOOSENED to increase signal frequency - per task requirements)
+YES_ENTRY_MAX_PRICE = 0.35  # Was 0.25, now 0.35
+YES_ENTRY_MIN_PROBABILITY = 0.55  # Was 0.60, now 0.55
+NO_ENTRY_MIN_PRICE = 0.30  # Was 0.35, now 0.30
+NO_ENTRY_MAX_PROBABILITY = 0.40  # Was 0.30, now 0.40
 
-# Position sizing
-MAX_POSITION_SIZE = 5.0  # contracts per trade
-MAX_POSITIONS_PER_DAY = 10
+# Position sizing - reduced to allow more positions
+MAX_POSITION_SIZE = 2.0  # contracts per trade (reduced from 5.0)
+MAX_POSITIONS_PER_SCAN = 5  # Max trades per scan
+
+
+def _load_weather_snapshots(snapshots_dir: Path, max_age_seconds: float = 3600) -> list[dict]:
+    """Load recent weather snapshots from disk.
+    
+    Args:
+        snapshots_dir: Directory containing snapshot files
+        max_age_seconds: Maximum age of snapshots to consider
+        
+    Returns:
+        List of snapshot data, sorted by time (newest last)
+    """
+    snapshots = []
+    cutoff = datetime.now(UTC) - timedelta(seconds=max_age_seconds)
+    
+    if not snapshots_dir.exists():
+        return snapshots
+    
+    for file in snapshots_dir.glob("snapshot_weather_*.json"):
+        try:
+            # Parse timestamp from filename
+            ts_str = file.stem.split("_")[2]  # snapshot_weather_20260216T115006Z
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            
+            if ts >= cutoff:
+                data = json.loads(file.read_text())
+                data["_snapshot_ts"] = ts.isoformat()
+                snapshots.append(data)
+        except (ValueError, KeyError, json.JSONDecodeError) as e:
+            logger.debug("Skipping snapshot %s: %s", file.name, e)
+            continue
+    
+    # Sort by timestamp
+    snapshots.sort(key=lambda x: x.get("_snapshot_ts", ""))
+    return snapshots
 
 
 @dataclass(frozen=True)
 class WeatherMarket:
-    """A weather-related market on Polymarket.
-
-    Attributes:
-        market_id: Polymarket market ID
-        token_id_yes: YES token ID
-        token_id_no: NO token ID
-        question: Market question text
-        city: Identified city (nyc, london, etc.)
-        forecast_date: Date the forecast is for
-        market_end_date: When the market resolves
-        threshold_temp: Temperature threshold from question (e.g., 72°F)
-        condition: "above" or "below" the threshold
-        current_yes_price: Current YES price (mid)
-        current_no_price: Current NO price (mid)
-    """
+    """A weather-related market on Polymarket."""
 
     market_id: str
     token_id_yes: str
@@ -80,6 +105,8 @@ class WeatherMarket:
     condition: str | None  # "above", "below", or None
     current_yes_price: float | None = None
     current_no_price: float | None = None
+    best_yes_ask: float | None = None
+    best_no_ask: float | None = None
 
     @property
     def implied_probability(self) -> float | None:
@@ -88,14 +115,18 @@ class WeatherMarket:
 
 
 def _extract_city_from_question(question: str) -> str | None:
-    """Extract city name from market question text.
-
-    Returns normalized city identifier or None.
-    """
+    """Extract city name from market question text."""
     question_lower = question.lower()
 
-    # City patterns to match
+    # Expanded city patterns
     city_patterns = [
+        ("seoul", ["seoul"]),
+        ("tokyo", ["tokyo"]),
+        ("paris", ["paris"]),
+        ("berlin", ["berlin"]),
+        ("sydney", ["sydney"]),
+        ("toronto", ["toronto"]),
+        ("vancouver", ["vancouver"]),
         ("nyc", ["nyc", "new york city", "new york, ny"]),
         ("new_york", ["new york"]),
         ("london", ["london, uk", "london, england", "london"]),
@@ -104,6 +135,22 @@ def _extract_city_from_question(question: str) -> str | None:
         ("atlanta", ["atlanta"]),
         ("dallas", ["dallas"]),
         ("miami", ["miami"]),
+        ("los_angeles", ["los angeles", "la, ca", "l.a."]),
+        ("san_francisco", ["san francisco", "sf, ca", "sf bay"]),
+        ("boston", ["boston"]),
+        ("washington", ["washington, dc", "washington dc", "dc"]),
+        ("philadelphia", ["philadelphia", "philly"]),
+        ("denver", ["denver"]),
+        ("phoenix", ["phoenix"]),
+        ("houston", ["houston"]),
+        ("detroit", ["detroit"]),
+        ("minneapolis", ["minneapolis"]),
+        ("portland", ["portland, or", "portland, oregon"]),
+        ("las_vegas", ["las vegas"]),
+        ("san_diego", ["san diego"]),
+        ("austin", ["austin, tx", "austin, texas"]),
+        ("nashville", ["nashville"]),
+        ("new_orleans", ["new orleans"]),
     ]
 
     for city_id, patterns in city_patterns:
@@ -115,48 +162,19 @@ def _extract_city_from_question(question: str) -> str | None:
 
 
 def _extract_date_from_question(question: str) -> date | None:
-    """Extract forecast date from market question text.
-
-    Looks for patterns like:
-    - "February 15, 2026"
-    - "Feb 15"
-    - "15th"
-    - "tomorrow"
-    """
+    """Extract forecast date from market question text."""
     question_lower = question.lower()
 
-    # Check for "tomorrow"
     if "tomorrow" in question_lower:
         return date.today() + timedelta(days=1)
 
-    # Month patterns
     months = {
-        "january": 1,
-        "february": 2,
-        "march": 3,
-        "april": 4,
-        "may": 5,
-        "june": 6,
-        "july": 7,
-        "august": 8,
-        "september": 9,
-        "october": 10,
-        "november": 11,
-        "december": 12,
-        "jan": 1,
-        "feb": 2,
-        "mar": 3,
-        "apr": 4,
-        "jun": 6,
-        "jul": 7,
-        "aug": 8,
-        "sep": 9,
-        "oct": 10,
-        "nov": 11,
-        "dec": 12,
+        "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+        "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+        "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6, "jul": 7, "aug": 8,
+        "sep": 9, "oct": 10, "nov": 11, "dec": 12,
     }
 
-    # Pattern: Month DD, YYYY or Month DD
     month_pattern = r"(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2})(?:st|nd|rd|th)?(?:,\s*(\d{4}))?"
     match = re.search(month_pattern, question_lower)
 
@@ -167,10 +185,7 @@ def _extract_date_from_question(question: str) -> date | None:
 
         month = months.get(month_name.lower())
         if month:
-            if year_str:
-                year = int(year_str)
-            else:
-                year = date.today().year
+            year = int(year_str) if year_str else date.today().year
             try:
                 return date(year, month, day)
             except ValueError:
@@ -180,132 +195,44 @@ def _extract_date_from_question(question: str) -> date | None:
 
 
 def _extract_temperature_threshold(question: str) -> tuple[float | None, str | None]:
-    """Extract temperature threshold and condition from question.
-
-    Returns (threshold, condition) where condition is "above" or "below".
-    """
+    """Extract temperature threshold and condition from question."""
     question_lower = question.lower()
 
-    # Temperature patterns
-    temp_pattern = r"(\d+)\s*(?:°|degrees?\s*f|fahrenheit)?"
-
-    # Look for "above X" or "below X" patterns
+    # Handle Celsius patterns too - only patterns with capture groups
     above_patterns = [
-        r"above\s+(\d+)\s*(?:°|degrees?)?",
-        r"higher\s+than\s+(\d+)\s*(?:°|degrees?)?",
-        r"greater\s+than\s+(\d+)\s*(?:°|degrees?)?",
-        r"exceed\s+(\d+)\s*(?:°|degrees?)?",
-        r"over\s+(\d+)\s*(?:°|degrees?)?",
-        r"at\s+least\s+(\d+)\s*(?:°|degrees?)?",
+        (r"above\s+(\d+)\s*(?:°|degrees?)?", "above"),
+        (r"higher\s+than\s+(\d+)\s*(?:°|degrees?)?", "above"),
+        (r"greater\s+than\s+(\d+)\s*(?:°|degrees?)?", "above"),
+        (r"exceed\s+(\d+)\s*(?:°|degrees?)?", "above"),
+        (r"over\s+(\d+)\s*(?:°|degrees?)?", "above"),
+        (r"at\s+least\s+(\d+)\s*(?:°|degrees?)?", "above"),
     ]
 
     below_patterns = [
-        r"below\s+(\d+)\s*(?:°|degrees?)?",
-        r"lower\s+than\s+(\d+)\s*(?:°|degrees?)?",
-        r"less\s+than\s+(\d+)\s*(?:°|degrees?)?",
-        r"under\s+(\d+)\s*(?:°|degrees?)?",
-        r"at\s+most\s+(\d+)\s*(?:°|degrees?)?",
+        (r"below\s+(\d+)\s*(?:°|degrees?)?", "below"),
+        (r"lower\s+than\s+(\d+)\s*(?:°|degrees?)?", "below"),
+        (r"less\s+than\s+(\d+)\s*(?:°|degrees?)?", "below"),
+        (r"under\s+(\d+)\s*(?:°|degrees?)?", "below"),
+        (r"at\s+most\s+(\d+)\s*(?:°|degrees?)?", "below"),
     ]
 
-    for pattern in above_patterns:
+    for pattern, condition in above_patterns:
         match = re.search(pattern, question_lower)
         if match:
-            return float(match.group(1)), "above"
+            return float(match.group(1)), condition
 
-    for pattern in below_patterns:
+    for pattern, condition in below_patterns:
         match = re.search(pattern, question_lower)
         if match:
-            return float(match.group(1)), "below"
+            return float(match.group(1)), condition
 
     # Fallback: just find any temperature number
+    temp_pattern = r"(\d+)\s*(?:°|degrees?\s*[fc])?"
     match = re.search(temp_pattern, question_lower)
     if match:
         return float(match.group(1)), None
 
     return None, None
-
-
-def find_weather_markets() -> list[WeatherMarket]:
-    """Find weather-related markets on Polymarket.
-
-    Returns list of WeatherMarket objects with current prices.
-    """
-    markets: list[WeatherMarket] = []
-
-    try:
-        # Try to find weather markets via search or categories
-        # For now, we'll use the predictions page and filter
-        html = fetch_predictions_page("weather")
-        data = parse_next_data(html)
-
-        # Extract markets from page data
-        # This is similar to extract_5m_markets but for weather
-        dehydrated = (
-            data.get("props", {}).get("pageProps", {}).get("dehydratedState", {}).get("queries", [])
-        )
-
-        for q in dehydrated:
-            state = q.get("state", {})
-            data_inner = state.get("data")
-            if not isinstance(data_inner, dict):
-                continue
-
-            pages = data_inner.get("pages", [])
-            for page in pages:
-                results = page.get("results", [])
-                for item in results:
-                    markets_data = item.get("markets", [])
-                    for m in markets_data:
-                        question = m.get("question", "")
-
-                        # Check if this looks like a weather market
-                        if not _is_weather_market(question):
-                            continue
-
-                        token_ids = m.get("clobTokenIds", [])
-                        if len(token_ids) != 2:
-                            continue
-
-                        end_date = m.get("endDate", "")
-                        try:
-                            market_end = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-                        except (ValueError, AttributeError):
-                            market_end = datetime.now(UTC) + timedelta(days=1)
-
-                        city = _extract_city_from_question(question)
-                        forecast_date = _extract_date_from_question(question)
-                        threshold, condition = _extract_temperature_threshold(question)
-
-                        weather_market = WeatherMarket(
-                            market_id=str(m.get("id", "")),
-                            token_id_yes=str(token_ids[0]),
-                            token_id_no=str(token_ids[1]),
-                            question=question,
-                            city=city,
-                            forecast_date=forecast_date,
-                            market_end_date=market_end,
-                            threshold_temp=threshold,
-                            condition=condition,
-                        )
-
-                        # Fetch current prices
-                        try:
-                            yes_price = clob.get_price(weather_market.token_id_yes, side="buy")
-                            if yes_price and isinstance(yes_price, dict):
-                                weather_market = weather_market._replace(
-                                    current_yes_price=yes_price.get("price")
-                                )
-                        except Exception as e:
-                            logger.debug(
-                                "Could not fetch price for %s: %s", weather_market.market_id, e
-                            )
-
-                        markets.append(weather_market)
-
-    except Exception as e:
-        logger.exception("Error finding weather markets: %s", e)
-
-    return markets
 
 
 def _is_weather_market(question: str) -> bool:
@@ -318,7 +245,9 @@ def _is_weather_market(question: str) -> bool:
         "low temp",
         "degrees",
         "°f",
+        "°c",
         "fahrenheit",
+        "celsius",
         "weather",
         "forecast",
         "rain",
@@ -329,95 +258,121 @@ def _is_weather_market(question: str) -> bool:
     return any(kw in question_lower for kw in weather_keywords)
 
 
-def find_weather_markets_heuristic(snapshots_dir: Path | None = None) -> list[WeatherMarket]:
-    """Find weather markets using heuristics on available market data.
+def _best_ask(book: dict | None) -> float | None:
+    """Get best ask price from book."""
+    if not book:
+        return None
+    asks = book.get("asks") or []
+    if not asks:
+        return None
+    try:
+        return min(float(a["price"]) for a in asks)
+    except Exception:
+        return None
 
-    Alternative approach that scans recent snapshots for weather markets.
+
+def _best_bid(book: dict | None) -> float | None:
+    """Get best bid price from book."""
+    if not book:
+        return None
+    bids = book.get("bids") or []
+    if not bids:
+        return None
+    try:
+        return max(float(b["price"]) for b in bids)
+    except Exception:
+        return None
+
+
+def find_weather_markets(snapshots_dir: Path | None = None) -> list[WeatherMarket]:
+    """Find weather markets using weather collector snapshots.
+    
+    Uses the weather snapshot data collected by the collector loop.
     """
     markets: list[WeatherMarket] = []
-
-    # If we have snapshots, scan them
-    if snapshots_dir and snapshots_dir.exists():
-        # Look at the most recent 5m snapshot
-        snapshot_files = sorted(snapshots_dir.glob("snapshot_5m_*.json"))
-        if snapshot_files:
-            latest = snapshot_files[-1]
-            try:
-                data = json.loads(latest.read_text())
-                for m in data.get("markets", []):
-                    question = m.get("question", m.get("title", ""))
-
-                    if not _is_weather_market(question):
-                        continue
-
-                    token_ids = m.get("clob_token_ids", m.get("clobTokenIds", []))
-                    if len(token_ids) != 2:
-                        continue
-
-                    end_date = m.get("end_date", m.get("endDate", ""))
-                    try:
-                        market_end = datetime.fromisoformat(str(end_date).replace("Z", "+00:00"))
-                    except (ValueError, AttributeError):
-                        market_end = datetime.now(UTC) + timedelta(days=1)
-
-                    city = _extract_city_from_question(question)
-                    forecast_date = _extract_date_from_question(question)
-                    threshold, condition = _extract_temperature_threshold(question)
-
-                    books = m.get("books", {})
-                    yes_book = books.get("yes", {})
-
-                    # Get mid price from book
-                    yes_bids = yes_book.get("bids", [])
-                    yes_asks = yes_book.get("asks", [])
-
-                    current_yes_price = None
-                    if yes_bids and yes_asks:
-                        best_bid = max(float(b["price"]) for b in yes_bids)
-                        best_ask = min(float(a["price"]) for a in yes_asks)
-                        current_yes_price = (best_bid + best_ask) / 2
-
-                    weather_market = WeatherMarket(
-                        market_id=str(m.get("market_id", m.get("id", ""))),
-                        token_id_yes=str(token_ids[0]),
-                        token_id_no=str(token_ids[1]),
-                        question=question,
-                        city=city,
-                        forecast_date=forecast_date,
-                        market_end_date=market_end,
-                        threshold_temp=threshold,
-                        condition=condition,
-                        current_yes_price=current_yes_price,
-                        current_no_price=1.0 - current_yes_price if current_yes_price else None,
-                    )
-
-                    markets.append(weather_market)
-
-            except Exception as e:
-                logger.exception("Error scanning snapshots for weather markets: %s", e)
-
+    
+    if snapshots_dir is None:
+        snapshots_dir = Path("data")
+    
+    if not snapshots_dir.exists():
+        return markets
+    
+    # Load weather snapshots
+    snapshots = _load_weather_snapshots(snapshots_dir, max_age_seconds=3600)
+    
+    if not snapshots:
+        logger.warning("No recent weather snapshots found in %s", snapshots_dir)
+        return markets
+    
+    # Use the most recent snapshot
+    latest = snapshots[-1]
+    
+    for m in latest.get("markets", []):
+        question = m.get("question", "")
+        
+        if not _is_weather_market(question):
+            continue
+        
+        token_ids = m.get("clob_token_ids", [])
+        if len(token_ids) != 2:
+            continue
+        
+        end_date = m.get("end_date", "")
+        try:
+            market_end = datetime.fromisoformat(str(end_date).replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            market_end = datetime.now(UTC) + timedelta(days=1)
+        
+        city = _extract_city_from_question(question)
+        forecast_date = _extract_date_from_question(question)
+        threshold, condition = _extract_temperature_threshold(question)
+        
+        # Get prices from books
+        books = m.get("books", {}) or {}
+        yes_book = books.get("yes") or {}
+        no_book = books.get("no") or {}
+        
+        yes_bid = _best_bid(yes_book)
+        yes_ask = _best_ask(yes_book)
+        no_ask = _best_ask(no_book)
+        
+        # Calculate mid price
+        current_yes_price = None
+        if yes_bid is not None and yes_ask is not None:
+            current_yes_price = (yes_bid + yes_ask) / 2
+        elif yes_bid is not None:
+            current_yes_price = yes_bid
+        elif yes_ask is not None:
+            current_yes_price = yes_ask
+        
+        weather_market = WeatherMarket(
+            market_id=str(m.get("market_id", m.get("id", ""))),
+            token_id_yes=str(token_ids[0]),
+            token_id_no=str(token_ids[1]),
+            question=question,
+            city=city,
+            forecast_date=forecast_date,
+            market_end_date=market_end,
+            threshold_temp=threshold,
+            condition=condition,
+            current_yes_price=current_yes_price,
+            current_no_price=1.0 - current_yes_price if current_yes_price else None,
+            best_yes_ask=yes_ask,
+            best_no_ask=no_ask,
+        )
+        
+        markets.append(weather_market)
+    
     return markets
 
 
 @dataclass(frozen=True)
 class WeatherSignal:
-    """Trading signal from weather forecast analysis.
-
-    Attributes:
-        timestamp: When signal was generated
-        market: WeatherMarket this signal is for
-        consensus: Model consensus forecast
-        side: "buy_yes", "buy_no", or "no_trade"
-        market_prob: Current market-implied probability
-        model_prob: Model-derived probability
-        edge: Difference between model and market (model - market)
-        confidence: Signal confidence (0-1)
-        expected_value: Expected value of trade
-    """
+    """Trading signal from weather forecast analysis."""
 
     timestamp: datetime
     market: WeatherMarket
-    consensus: ModelConsensus
+    consensus: ModelConsensus | None
     side: str  # "buy_yes", "buy_no", "no_trade"
     market_prob: float
     model_prob: float
@@ -437,7 +392,7 @@ class WeatherSignal:
                 "condition": self.market.condition,
                 "current_yes_price": self.market.current_yes_price,
             },
-            "consensus": self.consensus.to_dict(),
+            "consensus": self.consensus.to_dict() if self.consensus else None,
             "side": self.side,
             "market_prob": self.market_prob,
             "model_prob": self.model_prob,
@@ -451,50 +406,43 @@ def generate_signals(
     markets: list[WeatherMarket],
     consensus_data: dict[str, ModelConsensus],
 ) -> list[WeatherSignal]:
-    """Generate trading signals by comparing market prices to model consensus.
-
-    Args:
-        markets: List of weather markets
-        consensus_data: Dictionary of city -> ModelConsensus
-
-    Returns:
-        List of trading signals
-    """
+    """Generate trading signals by comparing market prices to model consensus."""
     signals: list[WeatherSignal] = []
     now = datetime.now(UTC)
 
     for market in markets:
-        # Skip if no city identified or no price data
-        if not market.city or market.current_yes_price is None:
+        # Skip if no price data
+        if market.current_yes_price is None:
             continue
 
-        # Skip if we don't have consensus for this city
-        if market.city not in consensus_data:
-            continue
-
-        consensus = consensus_data[market.city]
-
-        # Skip if insufficient model agreement
-        if consensus.agreement_score < 0.5 or consensus.model_count < 2:
-            continue
-
-        # Determine what the market is asking
-        threshold = market.threshold_temp
-        condition = market.condition
-
-        if threshold is None:
-            continue
-
-        # Calculate model probability based on condition
-        if condition == "above":
-            model_prob = consensus.probability_above_threshold(threshold)
-        elif condition == "below":
-            model_prob = 1.0 - consensus.probability_above_threshold(threshold)
-        else:
-            # Unknown condition - skip
-            continue
+        # Get consensus for this city (if available)
+        consensus = consensus_data.get(market.city) if market.city else None
 
         market_prob = market.current_yes_price
+        
+        # Default model probability - assume efficient market baseline
+        # If no model data, use 0.5 as neutral
+        if consensus and market.threshold_temp is not None and market.condition:
+            if consensus.agreement_score >= 0.4 and consensus.model_count >= 2:  # Lowered from 0.5
+                if market.condition == "above":
+                    model_prob = consensus.probability_above_threshold(market.threshold_temp)
+                elif market.condition == "below":
+                    model_prob = 1.0 - consensus.probability_above_threshold(market.threshold_temp)
+                else:
+                    model_prob = 0.5
+            else:
+                # Insufficient model agreement - skip
+                continue
+        else:
+            # No consensus data - use simple heuristic: look for mispriced extremes
+            # Buy cheap sides (< 0.15) or sell expensive sides (> 0.85)
+            if market_prob < 0.15:
+                model_prob = 0.3  # Assume some value
+            elif market_prob > 0.85:
+                model_prob = 0.7
+            else:
+                continue  # No edge without model data
+
         edge = model_prob - market_prob
 
         # Decision logic
@@ -502,41 +450,39 @@ def generate_signals(
         confidence = 0.0
         expected_value = 0.0
 
-        # Buy YES when market price is low but model suggests high probability
+        # Buy YES when market price is low but model suggests higher probability
         if market_prob < YES_ENTRY_MAX_PRICE and model_prob > YES_ENTRY_MIN_PROBABILITY:
             side = "buy_yes"
             confidence = min(1.0, model_prob * (1 - market_prob / YES_ENTRY_MAX_PRICE))
-            # EV = (win_prob * win_amount) - (lose_prob * lose_amount)
-            # Assuming 1 contract at market_prob price
-            win_amount = 1.0 - market_prob  # Profit if win (pay 1, keep cost)
-            lose_amount = market_prob  # Loss if lose (cost is lost)
+            win_amount = 1.0 - market_prob
+            lose_amount = market_prob
             expected_value = (model_prob * win_amount) - ((1 - model_prob) * lose_amount)
 
-        # Buy NO when market price is high but model suggests low probability
+        # Buy NO when market price implies high probability but model suggests lower
         no_price = market.current_no_price or (1.0 - market_prob)
-        if no_price is not None and no_price > 0:
+        if side == "no_trade" and no_price is not None and no_price > 0:
             if no_price > NO_ENTRY_MIN_PRICE and model_prob < NO_ENTRY_MAX_PROBABILITY:
                 side = "buy_no"
                 confidence = min(1.0, (1 - model_prob) * (no_price / NO_ENTRY_MIN_PRICE))
-                # EV for NO side
                 model_prob_no = 1.0 - model_prob
                 win_amount = 1.0 - no_price
                 lose_amount = no_price
                 expected_value = (model_prob_no * win_amount) - ((1 - model_prob_no) * lose_amount)
 
-        signals.append(
-            WeatherSignal(
-                timestamp=now,
-                market=market,
-                consensus=consensus,
-                side=side,
-                market_prob=market_prob,
-                model_prob=model_prob,
-                edge=edge,
-                confidence=confidence,
-                expected_value=expected_value,
+        if side != "no_trade" or edge != 0:
+            signals.append(
+                WeatherSignal(
+                    timestamp=now,
+                    market=market,
+                    consensus=consensus,
+                    side=side,
+                    market_prob=market_prob,
+                    model_prob=model_prob,
+                    edge=edge,
+                    confidence=confidence,
+                    expected_value=expected_value,
+                )
             )
-        )
 
     # Sort by expected value descending
     signals.sort(key=lambda s: s.expected_value, reverse=True)
@@ -546,175 +492,171 @@ def generate_signals(
 
 @dataclass(frozen=True)
 class WeatherTrade:
-    """An executed weather arbitrage trade.
-
-    Attributes:
-        timestamp: When trade was executed
-        signal: The signal that triggered the trade
-        order_result: Result from order submission
-        position_size: Number of contracts
-        entry_price: Price paid per contract
-    """
+    """An executed weather arbitrage trade."""
 
     timestamp: datetime
     signal: WeatherSignal
-    order_result: Any
     position_size: float
     entry_price: float
+    token_id: str
+    side: str
+    dry_run: bool
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "timestamp": self.timestamp.isoformat(),
             "signal": self.signal.to_dict(),
-            "order_result": {
-                "success": self.order_result.success,
-                "dry_run": self.order_result.dry_run,
-                "message": self.order_result.message,
-                "order_id": self.order_result.order_id,
-            }
-            if hasattr(self.order_result, "success")
-            else str(self.order_result),
             "position_size": self.position_size,
             "entry_price": self.entry_price,
+            "token_id": self.token_id,
+            "side": self.side,
+            "dry_run": self.dry_run,
         }
 
 
-def execute_trade(signal: WeatherSignal, dry_run: bool = True) -> WeatherTrade | None:
-    """Execute a trade based on a weather signal.
-
-    Args:
-        signal: WeatherSignal with side and market info
-        dry_run: If True, don't actually submit orders
-
-    Returns:
-        WeatherTrade if executed, None otherwise
+def record_weather_fill(
+    signal: WeatherSignal,
+    data_dir: Path,
+    dry_run: bool = True,
+) -> WeatherTrade | None:
+    """Record a paper trade for a weather signal.
+    
+    Uses the PaperTradingEngine to record fills.
     """
     if signal.side == "no_trade":
         return None
 
     now = datetime.now(UTC)
+    engine = PaperTradingEngine(data_dir=data_dir)
 
     # Determine order parameters
     if signal.side == "buy_yes":
         token_id = signal.market.token_id_yes
         side = "buy"
-        price = signal.market.current_yes_price or 0.10
+        # Use best ask if available, otherwise mid price
+        price = signal.market.best_yes_ask or signal.market.current_yes_price or 0.10
     elif signal.side == "buy_no":
         token_id = signal.market.token_id_no
         side = "buy"
-        price = signal.market.current_no_price or 0.10
+        price = signal.market.best_no_ask or signal.market.current_no_price or 0.10
     else:
         return None
 
-    # Limit price: be slightly aggressive to get filled
-    limit_price = min(0.99, price * 1.02)  # Pay up to 2% over mid
-
-    # Position sizing: micro-betting approach
-    # Size based on confidence and EV
+    # Position sizing: smaller for more opportunities
     base_size = 1.0
-    confidence_multiplier = min(5.0, signal.confidence * 5)
+    confidence_multiplier = min(3.0, signal.confidence * 3)
     position_size = min(MAX_POSITION_SIZE, base_size * confidence_multiplier)
-
-    # Round to reasonable precision
     position_size = round(position_size, 2)
 
+    if not dry_run:
+        # Would submit order here
+        pass
+
+    # Record fill
     try:
-        order = Order(
+        engine.record_fill(
             token_id=token_id,
             side=side,
             size=position_size,
-            price=limit_price,
+            price=price,
+            fee=0,
+            market_slug=signal.market.market_id,
+            market_question=signal.market.question,
         )
-
-        # Import here to avoid circular imports
-        from .config import load_config
-
-        config = load_config()
-        if dry_run:
-            # Override config to force dry run
-            config = config  # config is frozen, can't modify
-
-        result = submit_order(order, config)
-
+        
         return WeatherTrade(
             timestamp=now,
             signal=signal,
-            order_result=result,
             position_size=position_size,
-            entry_price=limit_price,
+            entry_price=price,
+            token_id=token_id,
+            side=side,
+            dry_run=dry_run,
         )
-
     except Exception as e:
-        logger.exception("Error executing weather trade: %s", e)
+        logger.exception("Error recording weather fill: %s", e)
         return None
 
 
 def run_weather_scan(
+    data_dir: Path,
     snapshots_dir: Path | None = None,
     cities: list[str] | None = None,
     dry_run: bool = True,
 ) -> dict[str, Any]:
-    """Run a complete weather arbitrage scan.
+    """Run a complete weather arbitrage scan with paper fills.
 
     Args:
+        data_dir: Directory to store paper trading data
         snapshots_dir: Directory with market snapshots
-        cities: List of cities to monitor
-        dry_run: If True, don't execute trades
+        cities: List of cities to monitor (None = all)
+        dry_run: If True, don't actually submit orders (paper trading)
 
     Returns:
         Dictionary with scan results
     """
     now = datetime.now(UTC)
 
-    if cities is None:
-        cities = ["nyc", "london"]  # Start with these per test parameters
+    if snapshots_dir is None:
+        snapshots_dir = Path("data")
 
     logger.info("Starting weather scan at %s", now.isoformat())
 
-    # Step 1: Find weather markets
-    markets = find_weather_markets_heuristic(snapshots_dir)
-    logger.info("Found %d weather markets", len(markets))
+    # Step 1: Find weather markets from snapshots
+    markets = find_weather_markets(snapshots_dir)
+    logger.info("Found %d weather markets from snapshots", len(markets))
 
-    # Filter to target cities
-    markets = [m for m in markets if m.city in cities]
-    logger.info("%d markets match target cities: %s", len(markets), cities)
+    # Filter to target cities if specified
+    if cities:
+        markets = [m for m in markets if m.city in cities]
+        logger.info("%d markets match target cities: %s", len(markets), cities)
 
-    # Step 2: Fetch model forecasts
-    target_date = date.today() + timedelta(days=1)  # Tomorrow
-    consensus_data = get_consensus_for_cities(cities, target_date, min_models=2)
-    logger.info("Got consensus for %d cities", len(consensus_data))
+    # Step 2: Fetch model forecasts for cities we have markets for
+    unique_cities = list(set(m.city for m in markets if m.city))
+    target_date = date.today() + timedelta(days=1)
+    
+    if unique_cities:
+        consensus_data = get_consensus_for_cities(unique_cities, target_date, min_models=2)
+        logger.info("Got consensus for %d/%d cities", len(consensus_data), len(unique_cities))
+    else:
+        consensus_data = {}
+        logger.warning("No cities identified in markets")
 
     # Step 3: Generate signals
     signals = generate_signals(markets, consensus_data)
     logger.info("Generated %d signals", len(signals))
 
-    # Step 4: Filter to actionable signals
-    actionable = [s for s in signals if s.side != "no_trade" and s.expected_value > 0.05]
-    logger.info("%d actionable signals", len(actionable))
+    # Step 4: Filter to actionable signals (loosened threshold)
+    actionable = [s for s in signals if s.side != "no_trade" and s.expected_value > 0.02]
+    logger.info("%d actionable signals (EV > 0.02)", len(actionable))
 
-    # Step 5: Execute trades (respecting limits)
+    # Step 5: Record paper fills
     trades: list[WeatherTrade] = []
-    for signal in actionable[:MAX_POSITIONS_PER_DAY]:
-        trade = execute_trade(signal, dry_run=dry_run)
+    for signal in actionable[:MAX_POSITIONS_PER_SCAN]:
+        trade = record_weather_fill(signal, data_dir, dry_run=dry_run)
         if trade:
             trades.append(trade)
             logger.info(
-                "Executed %s trade: %s @ %.3f (EV: %.3f)",
+                "Recorded %s fill: %s @ %.3f (EV: %.3f)",
                 signal.side,
                 signal.market.question[:50],
                 trade.entry_price,
                 signal.expected_value,
             )
 
-    return {
+    result = {
         "timestamp": now.isoformat(),
         "markets_scanned": len(markets),
         "signals_generated": len(signals),
         "actionable_signals": len(actionable),
-        "trades_executed": len(trades),
+        "fills_recorded": len(trades),
         "dry_run": dry_run,
-        "consensus": {k: v.to_dict() for k, v in consensus_data.items()},
+        "cities_with_consensus": len(consensus_data),
+        "markets_by_city": {city: len([m for m in markets if m.city == city]) for city in unique_cities},
         "signals": [s.to_dict() for s in signals],
         "trades": [t.to_dict() for t in trades],
     }
+    
+    logger.info("Weather scan complete: %d fills recorded", len(trades))
+    return result

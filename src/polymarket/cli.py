@@ -135,14 +135,25 @@ def cmd_btc_preclose_paper(args: argparse.Namespace) -> None:
     from decimal import Decimal
     from pathlib import Path
 
+    from .fills_monitor import get_current_thresholds
     from .strategy_btc_preclose import run_btc_preclose_paper
+
+    # Use auto-adjusted thresholds if available
+    cheap_price = Decimal(str(args.cheap_price))
+    window_seconds = int(args.window_seconds)
+
+    if args.use_monitor_thresholds:
+        monitored_price, monitored_window = get_current_thresholds()
+        cheap_price = monitored_price
+        window_seconds = monitored_window
 
     out = run_btc_preclose_paper(
         data_dir=Path(args.data_dir),
-        window_seconds=int(args.window_seconds),
-        cheap_price=Decimal(str(args.cheap_price)),
+        window_seconds=window_seconds,
+        cheap_price=cheap_price,
         size=Decimal(str(args.size)),
         starting_cash=Decimal(str(args.starting_cash)),
+        snapshots_dir=Path(args.snapshots_dir) if args.snapshots_dir else None,
     )
 
     if args.format == "json":
@@ -163,6 +174,85 @@ def cmd_btc_preclose_paper(args: argparse.Namespace) -> None:
                 print(
                     f"  {t['side']:<3} {t['price']:>5} | ttc={t['time_to_close_seconds']:>6}s | {t['market_slug']}"
                 )
+        print("=" * 70)
+
+
+def cmd_btc_preclose_paper_loop(args: argparse.Namespace) -> None:
+    from decimal import Decimal
+    from pathlib import Path
+
+    from .fills_monitor import get_current_thresholds
+    from .strategy_btc_preclose import run_btc_preclose_loop
+
+    # Use auto-adjusted thresholds if available
+    cheap_price = Decimal(str(args.cheap_price))
+    window_seconds = int(args.window_seconds)
+
+    if args.use_monitor_thresholds:
+        monitored_price, monitored_window = get_current_thresholds()
+        cheap_price = monitored_price
+        window_seconds = monitored_window
+
+    out = run_btc_preclose_loop(
+        data_dir=Path(args.data_dir),
+        window_seconds=window_seconds,
+        cheap_price=cheap_price,
+        size=Decimal(str(args.size)),
+        starting_cash=Decimal(str(args.starting_cash)),
+        loop_duration_minutes=int(args.loop_duration_minutes),
+        interval_seconds=int(args.interval_seconds),
+        snapshots_dir=Path(args.snapshots_dir) if args.snapshots_dir else None,
+    )
+
+    if args.format == "json":
+        print(json.dumps(out, indent=2))
+    else:
+        print("=" * 70)
+        print("BTC PRE-CLOSE PAPER LOOP")
+        print("=" * 70)
+        print(f"Duration: {out['loop_duration_minutes']}min | Interval: {out['interval_seconds']}s")
+        print(f"Iterations: {out['iterations']}")
+        print(
+            f"Window: {out['window_seconds']}s | Cheap <= {out['cheap_price']} | Size {out['size']}"
+        )
+        print(f"Total markets scanned: {out['total_markets_scanned']}")
+        print(f"Total near close:      {out['total_candidates_near_close']}")
+        print(f"Total fills recorded:  {out['total_fills_recorded']}")
+        if out["all_triggers"]:
+            print("\n--- All Triggers ---")
+            for t in out["all_triggers"][:10]:
+                print(
+                    f"  {t['side']:<3} {t['price']:>5} | ttc={t['time_to_close_seconds']:>6}s | {t['market_slug']}"
+                )
+        print("=" * 70)
+
+
+def cmd_fills_monitor(args: argparse.Namespace) -> None:
+    from pathlib import Path
+
+    from .fills_monitor import run_fills_monitor
+
+    out = run_fills_monitor(
+        fills_path=Path(args.fills_path),
+        stale_hours=int(args.stale_hours),
+        auto_adjust=bool(args.auto_adjust),
+    )
+
+    if args.format == "json":
+        print(json.dumps(out, indent=2))
+    else:
+        print("=" * 70)
+        print("FILLS MONITOR")
+        print("=" * 70)
+        print(f"Status: {out['status']}")
+        print(f"Message: {out['message']}")
+        print(f"Total fills: {out['total_fills']}")
+        if out['hours_since_last_fill']:
+            print(f"Hours since last fill: {out['hours_since_last_fill']}")
+        if out.get('alert_triggered'):
+            print("ALERT: Fills are stale!")
+        if out.get('auto_adjusted'):
+            print(f"Auto-adjusted: price={out['new_cheap_price']}, window={out['new_window_seconds']}s")
         print("=" * 70)
 
 
@@ -1214,6 +1304,114 @@ def cmd_no_bias_positions(args: argparse.Namespace) -> None:
                 print(f"    Market: {p['market'][:50]}...")
                 print(f"    Vertical: {p['vertical']} | Entry: {p['entry_price']:.3f}")
                 print(f"    Size: ${p['position_size']:,.2f} | Edge: {p['expected_edge']:.1%}")
+
+        print("\n" + "=" * 70)
+
+
+def cmd_discounted_outcome_scan(args: argparse.Namespace) -> None:
+    """Scan for discounted outcome arbitrage opportunities."""
+    from pathlib import Path
+
+    from .strategy_discounted_outcome import run_discounted_arbitrage_scan
+
+    result = run_discounted_arbitrage_scan(
+        snapshots_dir=Path(args.snapshots_dir),
+        data_dir=Path(args.data_dir) if args.data_dir else None,
+        dry_run=not args.live,
+        max_positions=args.max_positions,
+    )
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        print("=" * 70)
+        print("DISCOUNTED OUTCOME ARBITRAGE SCAN")
+        print("=" * 70)
+        print(f"Scan time: {result['timestamp']}")
+        print(f"Snapshot: {result['snapshot']}")
+        print(f"Markets discounted: {result['markets_discounted']}")
+
+        if result.get('by_vertical'):
+            print("\n--- By Vertical ---")
+            for vertical, count in result['by_vertical'].items():
+                print(f"  {vertical}: {count} markets")
+
+        print(f"\nSignals confirmed: {result['signals_confirmed']}")
+        print(f"Signals non-confirmed: {result['signals_non_confirmed']}")
+        print(f"Trades executed: {result['trades_executed']}")
+        print(f"Dry run: {result['dry_run']}")
+
+        if result.get('top_confirmed_signals'):
+            print("\n--- Top Confirmed Signals ---")
+            for sig in result['top_confirmed_signals'][:5]:
+                m = sig['market']
+                print(f"\n  {m['question'][:50]}...")
+                print(f"    Side: {m['discounted_side']} @ {m['discounted_price']:.3f}")
+                print(f"    Confidence: {sig['confidence_score']:.2f}")
+                print(f"    Insiders: {sig['confirmation_count']}")
+
+        if result.get('performance'):
+            perf = result['performance']
+            print("\n--- Performance Summary ---")
+            print(f"Total trades: {perf['total_trades']}")
+            print(f"Resolved: {perf['resolved_trades']}")
+            print(f"Overall win rate: {perf['overall_win_rate']:.1f}%")
+            print(f"Insider win rate: {perf['insider_win_rate']:.1f}%")
+            print(f"Non-insider win rate: {perf['non_insider_win_rate']:.1f}%")
+            print(f"Total PnL: ${perf['total_pnl']:,.2f}")
+
+        print("\n" + "=" * 70)
+
+
+def cmd_discounted_outcome_performance(args: argparse.Namespace) -> None:
+    """Show discounted outcome arbitrage performance."""
+    from pathlib import Path
+
+    from .strategy_discounted_outcome import DiscountedArbitrageTracker
+
+    data_dir = Path(args.data_dir) if args.data_dir else None
+    tracker = DiscountedArbitrageTracker(data_dir=data_dir)
+    perf = tracker.get_performance()
+    by_vertical = tracker.get_trades_by_vertical()
+
+    if args.format == "json":
+        print(json.dumps({
+            "performance": perf.to_dict(),
+            "by_vertical": {
+                v: [t.to_dict() for t in trades]
+                for v, trades in by_vertical.items()
+            }
+        }, indent=2))
+    else:
+        print("=" * 70)
+        print("DISCOUNTED OUTCOME ARBITRAGE PERFORMANCE")
+        print("=" * 70)
+
+        print("\n--- Overall Performance ---")
+        print(f"Total trades: {perf.total_trades}")
+        print(f"  Insider confirmed: {perf.insider_confirmed_trades}")
+        print(f"  Non-insider: {perf.non_insider_trades}")
+        print(f"\nResolved trades: {perf.resolved_trades}")
+        print(f"  Winning: {perf.winning_trades}")
+        print(f"  Losing: {perf.losing_trades}")
+        print("\nWin rates:")
+        print(f"  Overall: {perf.overall_win_rate:.1f}%")
+        print(f"  With insider: {perf.insider_win_rate:.1f}%")
+        print(f"  Without insider: {perf.non_insider_win_rate:.1f}%")
+        print("\nPnL:")
+        print(f"  Total: ${float(perf.total_pnl):,.2f}")
+        print(f"  Insider confirmed: ${float(perf.insider_pnl):,.2f}")
+        print(f"  Non-insider: ${float(perf.non_insider_pnl):,.2f}")
+        print(f"\nAvg hold time: {perf.avg_hold_time_hours:.1f}h")
+
+        if by_vertical:
+            print("\n--- By Vertical ---")
+            for vertical, trades in by_vertical.items():
+                resolved = [t for t in trades if t.resolved]
+                wins = [t for t in resolved if t.pnl and t.pnl > 0]
+                win_rate = (len(wins) / len(resolved) * 100) if resolved else 0
+                total_pnl = sum(t.pnl for t in resolved if t.pnl)
+                print(f"  {vertical}: {len(trades)} trades, {win_rate:.1f}% WR, ${float(total_pnl):,.2f}")
 
         print("\n" + "=" * 70)
 
@@ -2865,12 +3063,42 @@ def main() -> None:
         help="Paper-trade cheap-side trigger on BTC 5m markets near close",
     )
     btcpc.add_argument("--data-dir", default="data/paper_trading", help="Paper trading data dir")
-    btcpc.add_argument("--window-seconds", type=int, default=60)
-    btcpc.add_argument("--cheap-price", type=float, default=0.03)
+    btcpc.add_argument("--window-seconds", type=int, default=300, help="Time window before close (default: 300s)")
+    btcpc.add_argument("--cheap-price", type=float, default=0.05, help="Cheap price threshold (default: 0.05)")
     btcpc.add_argument("--size", type=float, default=1.0)
     btcpc.add_argument("--starting-cash", type=float, default=0.0)
+    btcpc.add_argument("--snapshots-dir", default="data", help="Directory containing 5m snapshot files (default: data)")
+    btcpc.add_argument("--use-monitor-thresholds", action="store_true", help="Use auto-adjusted thresholds from fills monitor")
     btcpc.add_argument("--format", choices=["json", "human"], default="human")
     btcpc.set_defaults(func=cmd_btc_preclose_paper)
+
+    # BTC pre-close cheap-side trigger (paper) - LOOP MODE for extended coverage
+    btcpl = sub.add_parser(
+        "btc-preclose-paper-loop",
+        help="Run BTC preclose paper trading in a loop for extended coverage",
+    )
+    btcpl.add_argument("--data-dir", default="data/paper_trading", help="Paper trading data dir")
+    btcpl.add_argument("--window-seconds", type=int, default=300, help="Time window before close (default: 300s)")
+    btcpl.add_argument("--cheap-price", type=float, default=0.05, help="Cheap price threshold (default: 0.05)")
+    btcpl.add_argument("--size", type=float, default=1.0)
+    btcpl.add_argument("--starting-cash", type=float, default=0.0)
+    btcpl.add_argument("--loop-duration-minutes", type=int, default=10, help="How long to run (default: 10 min)")
+    btcpl.add_argument("--interval-seconds", type=int, default=60, help="Seconds between scans (default: 60)")
+    btcpl.add_argument("--snapshots-dir", default="data", help="Directory containing 5m snapshot files (default: data)")
+    btcpl.add_argument("--use-monitor-thresholds", action="store_true", help="Use auto-adjusted thresholds from fills monitor")
+    btcpl.add_argument("--format", choices=["json", "human"], default="human")
+    btcpl.set_defaults(func=cmd_btc_preclose_paper_loop)
+
+    # Fills monitor - checks for stale fills and auto-adjusts thresholds
+    fm = sub.add_parser(
+        "fills-monitor",
+        help="Monitor fills for staleness and auto-adjust thresholds",
+    )
+    fm.add_argument("--fills-path", default="data/fills.jsonl", help="Path to fills.jsonl")
+    fm.add_argument("--stale-hours", type=int, default=6, help="Hours to consider fills stale")
+    fm.add_argument("--auto-adjust", action="store_true", default=True, help="Auto-adjust thresholds when stale")
+    fm.add_argument("--format", choices=["json", "human"], default="human")
+    fm.set_defaults(func=cmd_fills_monitor)
 
     # Combinatorial arbitrage command
     cb = sub.add_parser(
@@ -3123,6 +3351,50 @@ def main() -> None:
     )
     nbp.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     nbp.set_defaults(func=cmd_no_bias_positions)
+
+    # Discounted Outcome Arbitrage commands
+    do = sub.add_parser(
+        "discounted-outcome-scan",
+        help="Scan for discounted outcome arbitrage opportunities",
+    )
+    do.add_argument(
+        "--snapshots-dir",
+        type=str,
+        default="data",
+        help="Directory containing market snapshots (default: data)",
+    )
+    do.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Data directory for storing results",
+    )
+    do.add_argument(
+        "--max-positions",
+        type=int,
+        default=20,
+        help="Maximum positions to take (default: 20)",
+    )
+    do.add_argument(
+        "--live",
+        action="store_true",
+        help="Execute live trades (default: dry-run)",
+    )
+    do.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    do.set_defaults(func=cmd_discounted_outcome_scan)
+
+    do_perf = sub.add_parser(
+        "discounted-outcome-performance",
+        help="Show discounted outcome arbitrage performance",
+    )
+    do_perf.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Data directory for trade tracking",
+    )
+    do_perf.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    do_perf.set_defaults(func=cmd_discounted_outcome_performance)
 
     # Add trader profiling commands
     from .trader_cli import add_trader_commands
