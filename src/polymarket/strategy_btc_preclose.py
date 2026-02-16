@@ -23,6 +23,16 @@ def _best_ask(book: dict) -> Decimal | None:
         return None
 
 
+def _best_bid(book: dict) -> Decimal | None:
+    bids = (book or {}).get("bids") or []
+    if not bids:
+        return None
+    try:
+        return max(Decimal(str(b["price"])) for b in bids)
+    except Exception:
+        return None
+
+
 def _load_snapshots(snapshots_dir: Path, max_age_seconds: float = 900) -> list[dict]:
     """Load recent snapshots from disk (supports 5m and 15m).
 
@@ -97,6 +107,8 @@ def run_btc_preclose_paper(
     data_dir: Path,
     window_seconds: int = 600,  # Increased from 300 to 600 (10 min window)
     cheap_price: Decimal = Decimal("0.08"),  # Increased from 0.05 to 0.08
+    fair_price_threshold: Decimal = Decimal("0.35"),
+    wide_spread_threshold: Decimal = Decimal("0.10"),
     size: Decimal = Decimal("1"),
     starting_cash: Decimal = Decimal("0"),
     snapshots_dir: Path | None = None,
@@ -104,14 +116,19 @@ def run_btc_preclose_paper(
     """Paper-trade cheap-side trigger on BTC 5m markets near close.
 
     Uses snapshot data from collector instead of scraping (which is broken).
-    
+
     For each market ending within `window_seconds`, fetch YES/NO books.
     If either side's best ask <= cheap_price, record a paper BUY at that ask.
+
+    Secondary entry: If spread > wide_spread_threshold and price <= fair_price_threshold,
+    also trigger entry (captures wide spreads near close).
 
     Args:
         data_dir: Directory to store paper trading data
         window_seconds: Time window before close to consider markets (default: 600 = 10 min)
         cheap_price: Maximum price to consider "cheap" (default: 0.08)
+        fair_price_threshold: Maximum price for wide-spread entry (default: 0.35)
+        wide_spread_threshold: Spread > this triggers fair-price entry (default: 0.10)
         size: Position size per trade
         starting_cash: Starting cash balance
         snapshots_dir: Directory with collector snapshots (defaults to data_dir)
@@ -132,6 +149,8 @@ def run_btc_preclose_paper(
             "timestamp": now.isoformat(),
             "window_seconds": window_seconds,
             "cheap_price": str(cheap_price),
+            "fair_price_threshold": str(fair_price_threshold),
+            "wide_spread_threshold": str(wide_spread_threshold),
             "size": str(size),
             "markets_scanned": 0,
             "candidates_near_close": 0,
@@ -178,6 +197,12 @@ def run_btc_preclose_paper(
 
         yes_ask = _best_ask(yes_book)
         no_ask = _best_ask(no_book)
+        yes_bid = _best_bid(yes_book)
+        no_bid = _best_bid(no_book)
+
+        # Calculate spreads for secondary entry logic
+        yes_spread = (yes_ask - yes_bid) if yes_ask is not None and yes_bid is not None else None
+        no_spread = (no_ask - no_bid) if no_ask is not None and no_bid is not None else None
 
         # Log near-close detection with best asks for debugging
         near_close_log.append({
@@ -185,23 +210,57 @@ def run_btc_preclose_paper(
             "question": m.get("question", ""),
             "time_to_close_seconds": round(ttc, 3),
             "yes_ask": str(yes_ask) if yes_ask else None,
+            "yes_bid": str(yes_bid) if yes_bid else None,
+            "yes_spread": str(yes_spread) if yes_spread else None,
             "no_ask": str(no_ask) if no_ask else None,
+            "no_bid": str(no_bid) if no_bid else None,
+            "no_spread": str(no_spread) if no_spread else None,
             "timestamp": now.isoformat(),
         })
 
         token_id = None
         side_label = None
         px: Decimal | None = None
+        trigger_reason = None
 
+        # Primary entry: cheap price
         if yes_ask is not None and yes_ask <= cheap_price:
             token_id = yes_id
             side_label = "yes"
             px = yes_ask
+            trigger_reason = "cheap"
         if no_ask is not None and no_ask <= cheap_price:
             if px is None or no_ask < px:
                 token_id = no_id
                 side_label = "no"
                 px = no_ask
+                trigger_reason = "cheap"
+
+        # Secondary entry: wide spread + fair price
+        if token_id is None:
+            # Check YES side for wide spread entry
+            if yes_ask is not None and yes_spread is not None:
+                if yes_spread > wide_spread_threshold and yes_ask <= fair_price_threshold:
+                    token_id = yes_id
+                    side_label = "yes"
+                    px = yes_ask
+                    trigger_reason = "wide_spread"
+                    logger.debug(
+                        "Wide spread entry (YES): %s spread=%.3f > %.3f, ask=%.3f <= %.3f",
+                        m.get("slug"), yes_spread, wide_spread_threshold, yes_ask, fair_price_threshold
+                    )
+
+            # Check NO side for wide spread entry
+            if token_id is None and no_ask is not None and no_spread is not None:
+                if no_spread > wide_spread_threshold and no_ask <= fair_price_threshold:
+                    token_id = no_id
+                    side_label = "no"
+                    px = no_ask
+                    trigger_reason = "wide_spread"
+                    logger.debug(
+                        "Wide spread entry (NO): %s spread=%.3f > %.3f, ask=%.3f <= %.3f",
+                        m.get("slug"), no_spread, wide_spread_threshold, no_ask, fair_price_threshold
+                    )
 
         if token_id and px is not None:
             fill = engine.record_fill(
@@ -228,11 +287,12 @@ def run_btc_preclose_paper(
                 }
             )
             logger.info(
-                "BTC preclose fill: %s %s @ %s (ttc=%.1fs)",
+                "BTC preclose fill: %s %s @ %s (ttc=%.1fs, reason=%s)",
                 m.get("slug"),
                 side_label,
                 px,
                 ttc,
+                trigger_reason,
             )
 
     # Log near-close detections for debugging
@@ -250,6 +310,8 @@ def run_btc_preclose_paper(
         "timestamp": now.isoformat(),
         "window_seconds": window_seconds,
         "cheap_price": str(cheap_price),
+        "fair_price_threshold": str(fair_price_threshold),
+        "wide_spread_threshold": str(wide_spread_threshold),
         "size": str(size),
         "markets_scanned": scanned,
         "candidates_near_close": near_close,
@@ -303,6 +365,12 @@ def run_btc_preclose_loop(
         "Starting BTC preclose loop for %d minutes, scanning every %d seconds",
         loop_duration_minutes,
         interval_seconds,
+    )
+    logger.info(
+        "Thresholds: cheap=%s, fair_price=%s, wide_spread=%s",
+        cheap_price,
+        fair_price_threshold,
+        wide_spread_threshold,
     )
 
     while datetime.now(UTC) < end_time:
