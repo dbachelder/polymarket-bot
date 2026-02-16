@@ -80,9 +80,15 @@ class SanityCheckResult:
                 "mark_to_mid": float(self.computed_mark_to_mid),
             },
             "previous": {
-                "realized_pnl": float(self.previous_realized_pnl) if self.previous_realized_pnl is not None else None,
-                "unrealized_pnl": float(self.previous_unrealized_pnl) if self.previous_unrealized_pnl is not None else None,
-                "net_pnl": float(self.previous_net_pnl) if self.previous_net_pnl is not None else None,
+                "realized_pnl": float(self.previous_realized_pnl)
+                if self.previous_realized_pnl is not None
+                else None,
+                "unrealized_pnl": float(self.previous_unrealized_pnl)
+                if self.previous_unrealized_pnl is not None
+                else None,
+                "net_pnl": float(self.previous_net_pnl)
+                if self.previous_net_pnl is not None
+                else None,
                 "timestamp": self.previous_timestamp,
             },
             "deltas": {
@@ -270,7 +276,9 @@ def check_pnl_sanity(
     # Extract previous values
     try:
         result.previous_realized_pnl = Decimal(str(previous.get("pnl", {}).get("realized_pnl", 0)))
-        result.previous_unrealized_pnl = Decimal(str(previous.get("pnl", {}).get("unrealized_pnl", 0)))
+        result.previous_unrealized_pnl = Decimal(
+            str(previous.get("pnl", {}).get("unrealized_pnl", 0))
+        )
         result.previous_net_pnl = Decimal(str(previous.get("pnl", {}).get("net_pnl", 0)))
         result.previous_timestamp = previous.get("metadata", {}).get("generated_at")
 
@@ -320,9 +328,12 @@ def check_pnl_sanity(
         )
 
     # Check for sign flips in realized PnL (very suspicious)
-    if (result.previous_realized_pnl > 0 and result.computed_realized_pnl < 0) or \
-       (result.previous_realized_pnl < 0 and result.computed_realized_pnl > 0):
-        if abs(result.realized_pnl_delta) > alert_threshold_usd / 10:  # Lower threshold for sign flip
+    if (result.previous_realized_pnl > 0 and result.computed_realized_pnl < 0) or (
+        result.previous_realized_pnl < 0 and result.computed_realized_pnl > 0
+    ):
+        if (
+            abs(result.realized_pnl_delta) > alert_threshold_usd / 10
+        ):  # Lower threshold for sign flip
             result.passed = False
             result.alerts.append(
                 f"SUSPICIOUS SIGN FLIP: Realized PnL flipped from "

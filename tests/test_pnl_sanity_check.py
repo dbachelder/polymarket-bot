@@ -6,16 +6,13 @@ import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
-import pytest
 
 from polymarket.pnl_sanity_check import (
     SanityCheckResult,
     check_pnl_sanity,
     compute_pnl_from_fills,
     load_latest_pnl_summary,
-    DEFAULT_ALERT_THRESHOLD_USD,
 )
 
 

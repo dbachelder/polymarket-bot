@@ -151,14 +151,18 @@ def cmd_btc_preclose_paper(args: argparse.Namespace) -> None:
         print("=" * 70)
         print("BTC PRE-CLOSE PAPER TRIGGER")
         print("=" * 70)
-        print(f"Window: {out['window_seconds']}s | Cheap <= {out['cheap_price']} | Size {out['size']}")
+        print(
+            f"Window: {out['window_seconds']}s | Cheap <= {out['cheap_price']} | Size {out['size']}"
+        )
         print(f"Markets scanned: {out['markets_scanned']}")
         print(f"Near close:      {out['candidates_near_close']}")
         print(f"Fills recorded:  {out['fills_recorded']}")
-        if out['triggers']:
+        if out["triggers"]:
             print("\n--- Triggers ---")
-            for t in out['triggers'][:10]:
-                print(f"  {t['side']:<3} {t['price']:>5} | ttc={t['time_to_close_seconds']:>6}s | {t['market_slug']}")
+            for t in out["triggers"][:10]:
+                print(
+                    f"  {t['side']:<3} {t['price']:>5} | ttc={t['time_to_close_seconds']:>6}s | {t['market_slug']}"
+                )
         print("=" * 70)
 
 
@@ -1043,8 +1047,12 @@ def cmd_news_momentum_scan(args: argparse.Namespace) -> None:
                     f"  {sig['side']:<12} | edge={sig['edge']:+.2f} | "
                     f"conf={sig['confidence']:.1%} | {market_q}..."
                 )
-                print(f"    Current: {sig['current_price']:.3f} -> Target: {sig['target_price']:.3f}")
-                print(f"    Source: {sig['news_source']} | {sig['time_since_news_seconds']:.0f}s ago")
+                print(
+                    f"    Current: {sig['current_price']:.3f} -> Target: {sig['target_price']:.3f}"
+                )
+                print(
+                    f"    Source: {sig['news_source']} | {sig['time_since_news_seconds']:.0f}s ago"
+                )
 
         if result["trades"]:
             print("\n--- Executed Trades ---")
@@ -1077,20 +1085,25 @@ def cmd_news_momentum_positions(args: argparse.Namespace) -> None:
     open_positions = tracker.get_open_positions()
 
     if args.format == "json":
-        print(json.dumps({
-            "summary": summary,
-            "open_positions": [
+        print(
+            json.dumps(
                 {
-                    "position_id": p.position_id,
-                    "market": p.market_question,
-                    "side": p.side,
-                    "entry_price": p.entry_price,
-                    "position_size": p.position_size,
-                }
-                for p in open_positions
-            ],
-            "exits_today": exits,
-        }, indent=2))
+                    "summary": summary,
+                    "open_positions": [
+                        {
+                            "position_id": p.position_id,
+                            "market": p.market_question,
+                            "side": p.side,
+                            "entry_price": p.entry_price,
+                            "position_size": p.position_size,
+                        }
+                        for p in open_positions
+                    ],
+                    "exits_today": exits,
+                },
+                indent=2,
+            )
+        )
     else:
         print("=" * 70)
         print("NEWS-DRIVEN MOMENTUM POSITIONS")
@@ -1113,7 +1126,9 @@ def cmd_news_momentum_positions(args: argparse.Namespace) -> None:
         if exits:
             print(f"\n--- Exits Triggered ({len(exits)}) ---")
             for exit_info in exits:
-                print(f"  {exit_info['position_id']}: {exit_info['reason']} | PnL: ${exit_info['pnl']:.2f}")
+                print(
+                    f"  {exit_info['position_id']}: {exit_info['reason']} | PnL: ${exit_info['pnl']:.2f}"
+                )
 
         print("\n" + "=" * 70)
 
@@ -1390,6 +1405,7 @@ def cmd_collect_fills(args: argparse.Namespace) -> None:
     since = None
     if args.since:
         from datetime import datetime
+
         since = datetime.fromisoformat(args.since.replace("Z", "+00:00"))
 
     result = collect_fills(
@@ -1456,9 +1472,11 @@ def cmd_pnl_health(args: argparse.Namespace) -> None:
         print(f"  Exists:         {fills['exists']}")
         print(f"  Total fills:    {fills.get('total_fills', 0)}")
         print(f"  Last fill:      {fills.get('last_fill_at') or 'N/A'}")
-        if fills.get('age_seconds') is not None:
-            age_hours = fills['age_seconds'] / 3600
-            print(f"  Age:            {age_hours:.1f}h (max: {fills['max_age_seconds']/3600:.1f}h)")
+        if fills.get("age_seconds") is not None:
+            age_hours = fills["age_seconds"] / 3600
+            print(
+                f"  Age:            {age_hours:.1f}h (max: {fills['max_age_seconds'] / 3600:.1f}h)"
+            )
         print()
 
         pnl = result["pnl"]
@@ -1466,9 +1484,9 @@ def cmd_pnl_health(args: argparse.Namespace) -> None:
         print(f"  Exists:         {pnl['exists']}")
         print(f"  Latest file:    {pnl.get('latest_file') or 'N/A'}")
         print(f"  Latest date:    {pnl.get('latest_date') or 'N/A'}")
-        if pnl.get('age_seconds') is not None:
-            age_hours = pnl['age_seconds'] / 3600
-            print(f"  Age:            {age_hours:.1f}h (max: {pnl['max_age_seconds']/3600:.1f}h)")
+        if pnl.get("age_seconds") is not None:
+            age_hours = pnl["age_seconds"] / 3600
+            print(f"  Age:            {age_hours:.1f}h (max: {pnl['max_age_seconds'] / 3600:.1f}h)")
         print()
 
         if result["warnings"]:
@@ -1515,9 +1533,19 @@ def cmd_pnl_sanity_check(args: argparse.Namespace) -> None:
 
         if result.previous_timestamp:
             print("\n--- Previous Values ---")
-            prev_realized = result.previous_realized_pnl if result.previous_realized_pnl is not None else Decimal("0")
-            prev_unrealized = result.previous_unrealized_pnl if result.previous_unrealized_pnl is not None else Decimal("0")
-            prev_net = result.previous_net_pnl if result.previous_net_pnl is not None else Decimal("0")
+            prev_realized = (
+                result.previous_realized_pnl
+                if result.previous_realized_pnl is not None
+                else Decimal("0")
+            )
+            prev_unrealized = (
+                result.previous_unrealized_pnl
+                if result.previous_unrealized_pnl is not None
+                else Decimal("0")
+            )
+            prev_net = (
+                result.previous_net_pnl if result.previous_net_pnl is not None else Decimal("0")
+            )
             print(f"  Realized PnL:   ${float(prev_realized):,.2f}")
             print(f"  Unrealized PnL: ${float(prev_unrealized):,.2f}")
             print(f"  Net PnL:        ${float(prev_net):,.2f}")
