@@ -46,6 +46,22 @@ case "${1:-}" in
         shift
         $PYTHON -m polymarket.cli health-check "$@"
         ;;
+    collect-fills)
+        shift
+        $PYTHON -m polymarket.cli collect-fills "$@"
+        ;;
+    pnl-loop)
+        shift
+        $PYTHON -m polymarket.cli pnl-loop "$@"
+        ;;
+    pnl-health)
+        shift
+        $PYTHON -m polymarket.cli pnl-health "$@"
+        ;;
+    watchdog)
+        shift
+        $PYTHON -m polymarket.cli watchdog "$@"
+        ;;
     collect-5m)
         shift
         $PYTHON -m polymarket.cli collect-5m "$@"
@@ -78,13 +94,13 @@ case "${1:-}" in
         shift
         $PYTHON -m polymarket.cli binance-align "$@"
         ;;
-    weather-consensus-scan)
+    cross-market-scan)
         shift
-        $PYTHON -m polymarket.cli weather-consensus-scan "$@"
+        $PYTHON -m polymarket.cli cross-market-scan "$@"
         ;;
-    weather-consensus-loop)
+    cross-market-report)
         shift
-        $PYTHON -m polymarket.cli weather-consensus-loop "$@"
+        $PYTHON -m polymarket.cli cross-market-report "$@"
         ;;
     shell)
         # Drop into a shell with the venv activated
@@ -103,6 +119,9 @@ case "${1:-}" in
         echo "  pnl-verify         Verify PnL from fills data"
         echo "  tests              Run pytest test suite"
         echo "  health-check       Check collector health and staleness"
+        echo "  collect-fills      Collect fills from paper + real account"
+        echo "  pnl-loop           Run PnL collection/verification loop"
+        echo "  pnl-health         Check fills and PnL data health"
         echo ""
         echo "Additional commands:"
         echo "  collect-5m         Snapshot 5M predictions + CLOB orderbooks"
@@ -113,8 +132,8 @@ case "${1:-}" in
         echo "  binance-collect    Collect Binance BTC data (single snapshot)"
         echo "  binance-loop       Run Binance WebSocket collector loop"
         echo "  binance-align      Align Binance features to Polymarket"
-        echo "  weather-consensus-scan  Scan for weather model consensus mispricing"
-        echo "  weather-consensus-loop  Run continuous weather consensus scanning"
+        echo "  cross-market-scan  Scan for cross-market arbitrage opportunities"
+        echo "  cross-market-report Generate cross-market arbitrage performance report"
         echo ""
         echo "Utility commands:"
         echo "  shell              Open shell with venv activated"

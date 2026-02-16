@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_SPREAD_ALERT_THRESHOLD = 0.50  # Alert if spread > 50 cents
 DEFAULT_EXTREME_PIN_THRESHOLD = 0.05  # Alert if best bid <= 0.05 or best ask >= 0.95
 DEFAULT_DEPTH_LEVELS = 10  # Top N levels for depth calculation
+DEFAULT_TIGHT_SPREAD_THRESHOLD = 0.05  # Spread <= 5 cents is considered tight
+DEFAULT_CONSISTENCY_THRESHOLD = 0.10  # Consistency diff <= 0.10 is considered OK
 
 
 def _to_float(val: str | float | int) -> float:
@@ -109,20 +111,55 @@ def _compute_implied_probabilities(
     }
 
 
+def _is_tight_spread(
+    spread: float | None, threshold: float = DEFAULT_TIGHT_SPREAD_THRESHOLD
+) -> bool:
+    """Check if spread is tight (<= threshold)."""
+    return spread is not None and spread <= threshold
+
+
+def _is_consistent_probabilities(
+    implied: dict[str, Any] | None,
+    threshold: float = DEFAULT_CONSISTENCY_THRESHOLD,
+) -> bool:
+    """Check if implied probabilities are consistent (sum ~1.0, low consistency_diff)."""
+    if implied is None:
+        return False
+    mid_sum = implied.get("mid_sum")
+    consistency_diff = implied.get("consistency_diff")
+    if mid_sum is None or consistency_diff is None:
+        return False
+    # Market is consistent if sum is close to 1.0 and diff between estimates is low
+    return abs(mid_sum - 1.0) <= threshold and consistency_diff <= threshold
+
+
 def check_alerts(
     metrics: dict[str, Any],
     spread_threshold: float = DEFAULT_SPREAD_ALERT_THRESHOLD,
     extreme_pin_threshold: float = DEFAULT_EXTREME_PIN_THRESHOLD,
+    tight_spread_threshold: float = DEFAULT_TIGHT_SPREAD_THRESHOLD,
+    consistency_threshold: float = DEFAULT_CONSISTENCY_THRESHOLD,
+    btc_context: dict[str, Any] | None = None,
 ) -> list[str]:
     """Check for alert conditions in market metrics.
 
-    Returns a list of alert messages.
+    Args:
+        metrics: Market microstructure metrics
+        spread_threshold: Alert if spread exceeds this value
+        extreme_pin_threshold: Alert if price is at extremes (<= this or >= 1-this)
+        tight_spread_threshold: Consider spread "tight" if <= this value
+        consistency_threshold: Consider probs "consistent" if sum diff and consistency_diff <= this
+        btc_context: Optional dict with BTC movement context (e.g., {"return_5m": 0.02, "return_1h": -0.05})
+
+    Returns:
+        List of alert messages.
     """
     alerts = []
 
     yes_metrics = metrics.get("yes", {})
     no_metrics = metrics.get("no", {})
     market_title = metrics.get("market_title", "Unknown")
+    implied_probs = metrics.get("implied_probabilities")
 
     # Check YES book spread
     yes_spread = yes_metrics.get("spread")
@@ -145,29 +182,109 @@ def check_alerts(
     no_best_bid = no_metrics.get("best_bid")
     no_best_ask = no_metrics.get("best_ask")
 
+    # Determine if market is healthy (tight spread + consistent probs)
+    yes_tight = _is_tight_spread(yes_spread, tight_spread_threshold)
+    no_tight = _is_tight_spread(no_spread, tight_spread_threshold)
+    probs_consistent = _is_consistent_probabilities(implied_probs, consistency_threshold)
+    market_healthy = (yes_tight or no_tight) and probs_consistent
+
+    # Build BTC context string if provided
+    btc_context_str = ""
+    if btc_context:
+        parts = []
+        if "return_5m" in btc_context:
+            parts.append(f"5m={btc_context['return_5m']:+.2%}")
+        if "return_1h" in btc_context:
+            parts.append(f"1h={btc_context['return_1h']:+.2%}")
+        if "return_24h" in btc_context:
+            parts.append(f"24h={btc_context['return_24h']:+.2%}")
+        if parts:
+            btc_context_str = f" [BTC: {', '.join(parts)}]"
+
+    # YES best bid at extreme
     if yes_best_bid is not None and yes_best_bid <= extreme_pin_threshold:
-        alerts.append(
-            f"[{market_title}] YES best bid pinned at extreme: {yes_best_bid:.2f} "
-            f"(threshold: <= {extreme_pin_threshold:.2f})"
-        )
+        if market_healthy:
+            # Suppressed: tight spread + consistent probs = likely genuine extreme
+            alerts.append(
+                f"[{market_title}] YES best bid at extreme: {yes_best_bid:.2f} "
+                f"(SUPPRESSED: spread tight={yes_spread:.2f}, probs consistent)"
+            )
+        else:
+            msg = (
+                f"[{market_title}] YES best bid pinned at extreme: {yes_best_bid:.2f} "
+                f"(threshold: <= {extreme_pin_threshold:.2f})"
+            )
+            if yes_spread is not None and yes_spread > tight_spread_threshold:
+                msg += f" [spread={yes_spread:.2f} > {tight_spread_threshold:.2f}]"
+            if implied_probs and not probs_consistent:
+                consistency_diff = implied_probs.get("consistency_diff", "N/A")
+                msg += f" [inconsistent probs: diff={consistency_diff:.3f}]"
+            if btc_context_str:
+                msg += btc_context_str
+            alerts.append(msg)
 
+    # YES best ask at extreme
     if yes_best_ask is not None and yes_best_ask >= (1.0 - extreme_pin_threshold):
-        alerts.append(
-            f"[{market_title}] YES best ask pinned at extreme: {yes_best_ask:.2f} "
-            f"(threshold: >= {1.0 - extreme_pin_threshold:.2f})"
-        )
+        if market_healthy:
+            alerts.append(
+                f"[{market_title}] YES best ask at extreme: {yes_best_ask:.2f} "
+                f"(SUPPRESSED: spread tight={yes_spread:.2f}, probs consistent)"
+            )
+        else:
+            msg = (
+                f"[{market_title}] YES best ask pinned at extreme: {yes_best_ask:.2f} "
+                f"(threshold: >= {1.0 - extreme_pin_threshold:.2f})"
+            )
+            if yes_spread is not None and yes_spread > tight_spread_threshold:
+                msg += f" [spread={yes_spread:.2f} > {tight_spread_threshold:.2f}]"
+            if implied_probs and not probs_consistent:
+                consistency_diff = implied_probs.get("consistency_diff", "N/A")
+                msg += f" [inconsistent probs: diff={consistency_diff:.3f}]"
+            if btc_context_str:
+                msg += btc_context_str
+            alerts.append(msg)
 
+    # NO best bid at extreme
     if no_best_bid is not None and no_best_bid <= extreme_pin_threshold:
-        alerts.append(
-            f"[{market_title}] NO best bid pinned at extreme: {no_best_bid:.2f} "
-            f"(threshold: <= {extreme_pin_threshold:.2f})"
-        )
+        if market_healthy:
+            alerts.append(
+                f"[{market_title}] NO best bid at extreme: {no_best_bid:.2f} "
+                f"(SUPPRESSED: spread tight={no_spread:.2f}, probs consistent)"
+            )
+        else:
+            msg = (
+                f"[{market_title}] NO best bid pinned at extreme: {no_best_bid:.2f} "
+                f"(threshold: <= {extreme_pin_threshold:.2f})"
+            )
+            if no_spread is not None and no_spread > tight_spread_threshold:
+                msg += f" [spread={no_spread:.2f} > {tight_spread_threshold:.2f}]"
+            if implied_probs and not probs_consistent:
+                consistency_diff = implied_probs.get("consistency_diff", "N/A")
+                msg += f" [inconsistent probs: diff={consistency_diff:.3f}]"
+            if btc_context_str:
+                msg += btc_context_str
+            alerts.append(msg)
 
+    # NO best ask at extreme
     if no_best_ask is not None and no_best_ask >= (1.0 - extreme_pin_threshold):
-        alerts.append(
-            f"[{market_title}] NO best ask pinned at extreme: {no_best_ask:.2f} "
-            f"(threshold: >= {1.0 - extreme_pin_threshold:.2f})"
-        )
+        if market_healthy:
+            alerts.append(
+                f"[{market_title}] NO best ask at extreme: {no_best_ask:.2f} "
+                f"(SUPPRESSED: spread tight={no_spread:.2f}, probs consistent)"
+            )
+        else:
+            msg = (
+                f"[{market_title}] NO best ask pinned at extreme: {no_best_ask:.2f} "
+                f"(threshold: >= {1.0 - extreme_pin_threshold:.2f})"
+            )
+            if no_spread is not None and no_spread > tight_spread_threshold:
+                msg += f" [spread={no_spread:.2f} > {tight_spread_threshold:.2f}]"
+            if implied_probs and not probs_consistent:
+                consistency_diff = implied_probs.get("consistency_diff", "N/A")
+                msg += f" [inconsistent probs: diff={consistency_diff:.3f}]"
+            if btc_context_str:
+                msg += btc_context_str
+            alerts.append(msg)
 
     return alerts
 
@@ -250,6 +367,9 @@ def generate_microstructure_summary(
     spread_threshold: float = DEFAULT_SPREAD_ALERT_THRESHOLD,
     extreme_pin_threshold: float = DEFAULT_EXTREME_PIN_THRESHOLD,
     depth_levels: int = DEFAULT_DEPTH_LEVELS,
+    tight_spread_threshold: float = DEFAULT_TIGHT_SPREAD_THRESHOLD,
+    consistency_threshold: float = DEFAULT_CONSISTENCY_THRESHOLD,
+    btc_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generate a summary report of market microstructure with alerts.
 
@@ -259,6 +379,9 @@ def generate_microstructure_summary(
         spread_threshold: Alert threshold for spread
         extreme_pin_threshold: Alert threshold for extreme price pinning
         depth_levels: Number of book levels to include in depth calculation
+        tight_spread_threshold: Consider spread "tight" if <= this value
+        consistency_threshold: Consider probs "consistent" if sum diff and consistency_diff <= this
+        btc_context: Optional dict with BTC movement context for alert enrichment
 
     Returns:
         Dict with summary statistics and alerts
@@ -303,8 +426,15 @@ def generate_microstructure_summary(
 
         market_summaries.append(market_summary)
 
-        # Check for alerts
-        alerts = check_alerts(analysis, spread_threshold, extreme_pin_threshold)
+        # Check for alerts with new thresholds and BTC context
+        alerts = check_alerts(
+            analysis,
+            spread_threshold,
+            extreme_pin_threshold,
+            tight_spread_threshold,
+            consistency_threshold,
+            btc_context,
+        )
         all_alerts.extend(alerts)
 
     return {
@@ -313,6 +443,8 @@ def generate_microstructure_summary(
         "markets_analyzed": len(analyses),
         "spread_threshold": spread_threshold,
         "extreme_pin_threshold": extreme_pin_threshold,
+        "tight_spread_threshold": tight_spread_threshold,
+        "consistency_threshold": consistency_threshold,
         "depth_levels": depth_levels,
         "market_summaries": market_summaries,
         "alerts": all_alerts,
@@ -327,6 +459,9 @@ def write_microstructure_report(
     spread_threshold: float = DEFAULT_SPREAD_ALERT_THRESHOLD,
     extreme_pin_threshold: float = DEFAULT_EXTREME_PIN_THRESHOLD,
     depth_levels: int = DEFAULT_DEPTH_LEVELS,
+    tight_spread_threshold: float = DEFAULT_TIGHT_SPREAD_THRESHOLD,
+    consistency_threshold: float = DEFAULT_CONSISTENCY_THRESHOLD,
+    btc_context: dict[str, Any] | None = None,
 ) -> Path:
     """Generate and write a microstructure report to disk.
 
@@ -338,6 +473,9 @@ def write_microstructure_report(
         spread_threshold=spread_threshold,
         extreme_pin_threshold=extreme_pin_threshold,
         depth_levels=depth_levels,
+        tight_spread_threshold=tight_spread_threshold,
+        consistency_threshold=consistency_threshold,
+        btc_context=btc_context,
     )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

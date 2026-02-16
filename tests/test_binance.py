@@ -134,7 +134,17 @@ class TestSnapshot:
 class TestBinanceRestClient:
     def test_client_context_manager(self):
         with BinanceRestClient() as client:
+            # Default is now api.binance.us (first in failover list)
+            assert client.base_url == "https://api.binance.us"
+
+    def test_client_context_manager_custom_base(self):
+        with BinanceRestClient(base_urls="https://api.binance.com") as client:
             assert client.base_url == "https://api.binance.com"
+
+    def test_client_failover_list(self):
+        bases = ["https://api.binance.us", "https://api.binance.com"]
+        with BinanceRestClient(base_urls=bases) as client:
+            assert client.base_url == "https://api.binance.us"
 
     def test_client_close(self):
         client = BinanceRestClient()
@@ -150,6 +160,12 @@ class TestBinanceWebSocketCollector:
 
     def test_get_stream_url_single(self):
         collector = BinanceWebSocketCollector()
+        url = collector._get_stream_url(["btcusdt@aggTrade"])
+        # Default is now stream.binance.us (first in failover list)
+        assert url == "wss://stream.binance.us:9443/ws/btcusdt@aggTrade"
+
+    def test_get_stream_url_single_custom_base(self):
+        collector = BinanceWebSocketCollector(ws_bases="wss://stream.binance.com:9443/ws")
         url = collector._get_stream_url(["btcusdt@aggTrade"])
         assert url == "wss://stream.binance.com:9443/ws/btcusdt@aggTrade"
 
@@ -272,9 +288,7 @@ class TestAlignToPolymarketSnapshots:
             ],
             "klines": {},
         }
-        (binance_dir / "binance_btcusdt_20231114T221320Z.json").write_text(
-            json.dumps(binance_snap)
-        )
+        (binance_dir / "binance_btcusdt_20231114T221320Z.json").write_text(json.dumps(binance_snap))
 
         # Create a Polymarket snapshot at same time
         pm_snap = {

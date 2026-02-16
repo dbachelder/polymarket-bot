@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import json
-<<<<<<< HEAD
 import logging
-=======
->>>>>>> origin/fix/f80d90a7
 import random
 import time
 from datetime import UTC, datetime, timedelta
@@ -13,7 +10,6 @@ from pathlib import Path
 import httpx
 
 from .collector import collect_5m_snapshot, collect_15m_snapshot
-<<<<<<< HEAD
 from .microstructure import (
     DEFAULT_DEPTH_LEVELS,
     DEFAULT_EXTREME_PIN_THRESHOLD,
@@ -24,8 +20,6 @@ from .microstructure import (
 )
 
 logger = logging.getLogger(__name__)
-=======
->>>>>>> origin/fix/f80d90a7
 
 
 def _prune_old_files(out_dir: Path, prefix: str, retention_hours: float) -> int:
@@ -45,7 +39,6 @@ def _prune_old_files(out_dir: Path, prefix: str, retention_hours: float) -> int:
     return deleted
 
 
-<<<<<<< HEAD
 def _prune_by_count(out_dir: Path, prefix: str, max_snapshots: int) -> int:
     """Prune oldest snapshots to keep only max_snapshots most recent.
 
@@ -201,19 +194,11 @@ def collect_15m_loop(
     spread_alert_threshold: float = DEFAULT_SPREAD_ALERT_THRESHOLD,
     extreme_pin_threshold: float = DEFAULT_EXTREME_PIN_THRESHOLD,
     depth_levels: int = DEFAULT_DEPTH_LEVELS,
-=======
-def collect_15m_loop(
-    out_dir: Path,
-    interval_seconds: float = 5.0,
-    max_backoff_seconds: float = 60.0,
-    retention_hours: float | None = None,
->>>>>>> origin/fix/f80d90a7
 ) -> None:
     """Continuously snapshot /crypto/15M and CLOB books.
 
     On HTTP 429 or transient 5xx/network errors, exponentially back off up to max_backoff_seconds.
     Resets backoff after a successful snapshot.
-<<<<<<< HEAD
 
     Args:
         out_dir: Directory to write snapshots
@@ -226,15 +211,12 @@ def collect_15m_loop(
         spread_alert_threshold: Alert threshold for spread
         extreme_pin_threshold: Alert threshold for extreme price pinning
         depth_levels: Number of book levels to include in depth calculation
-=======
->>>>>>> origin/fix/f80d90a7
     """
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
     base = max(0.5, float(interval_seconds))
     backoff = base
-<<<<<<< HEAD
     last_microstructure_run = 0.0
 
     while True:
@@ -301,23 +283,6 @@ def collect_15m_loop(
             httpx.ReadTimeout,
             httpx.RemoteProtocolError,
         ) as e:
-=======
-
-    while True:
-        started = time.time()
-        try:
-            out_path = collect_15m_snapshot(out_dir)
-            # Touch a small sidecar "latest" pointer (handy for tailing)
-            latest = out_dir / "latest_15m.json"
-            latest.write_text(json.dumps({"path": str(out_path), "generated_at": datetime.now(UTC).isoformat()}))
-
-            backoff = base
-
-            if retention_hours is not None:
-                _prune_old_files(out_dir, prefix="snapshot_15m", retention_hours=float(retention_hours))
-
-        except (httpx.HTTPStatusError, httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as e:
->>>>>>> origin/fix/f80d90a7
             # httpx raises HTTPStatusError only if raise_for_status() was called.
             status = getattr(getattr(e, "response", None), "status_code", None)
             is_retryable = status in (429, 500, 502, 503, 504) or status is None
@@ -356,18 +321,13 @@ def collect_5m_loop(
             out_path = collect_5m_snapshot(out_dir)
             # Touch a small sidecar "latest" pointer (handy for tailing)
             latest = out_dir / "latest_5m.json"
-<<<<<<< HEAD
             latest.write_text(
                 json.dumps({"path": str(out_path), "generated_at": datetime.now(UTC).isoformat()})
             )
-=======
-            latest.write_text(json.dumps({"path": str(out_path), "generated_at": datetime.now(UTC).isoformat()}))
->>>>>>> origin/fix/f80d90a7
 
             backoff = base
 
             if retention_hours is not None:
-<<<<<<< HEAD
                 _prune_old_files(
                     out_dir, prefix="snapshot_5m", retention_hours=float(retention_hours)
                 )
@@ -378,11 +338,6 @@ def collect_5m_loop(
             httpx.ReadTimeout,
             httpx.RemoteProtocolError,
         ) as e:
-=======
-                _prune_old_files(out_dir, prefix="snapshot_5m", retention_hours=float(retention_hours))
-
-        except (httpx.HTTPStatusError, httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as e:
->>>>>>> origin/fix/f80d90a7
             # httpx raises HTTPStatusError only if raise_for_status() was called.
             status = getattr(getattr(e, "response", None), "status_code", None)
             is_retryable = status in (429, 500, 502, 503, 504) or status is None
