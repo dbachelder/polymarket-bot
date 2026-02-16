@@ -288,6 +288,8 @@ def collect_fills(
     include_account: bool = True,
     include_paper: bool = True,
     since: datetime | None = None,
+    account_limit: int = 100,
+    account_max_pages: int = 10,
 ) -> dict:
     """Collect fills from all sources and write to fills.jsonl.
 
@@ -333,7 +335,11 @@ def collect_fills(
     # Fetch account fills
     if include_account:
         try:
-            account_fills = fetch_account_fills(since=since)
+            account_fills = fetch_account_fills(
+                since=since,
+                limit=int(account_limit),
+                max_pages=int(account_max_pages),
+            )
             for fill in account_fills:
                 if fill.transaction_hash and fill.transaction_hash in existing_txs:
                     results["duplicates_skipped"] += 1

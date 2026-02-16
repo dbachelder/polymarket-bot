@@ -162,10 +162,26 @@ def run_collect_fills_loop(
                 )
                 logger.warning(warning_msg)
 
+                # When stale, do one best-effort backfill pass with a much larger window.
+                # This mitigates API pagination edge cases and inclusive/exclusive timestamp behavior.
+                try:
+                    logger.warning("Stale backfill: re-syncing account fills with expanded limits...")
+                    collect_fills(
+                        fills_path=fills_path,
+                        paper_fills_path=paper_fills_path,
+                        include_account=include_account,
+                        include_paper=include_paper,
+                        since=None,
+                        account_limit=500,
+                        account_max_pages=50,
+                    )
+                except Exception:
+                    logger.exception("Stale backfill attempt failed")
+
                 # Emit OpenClaw notification
                 notification = (
                     f"🚨 Polymarket fills stale: {age_hours:.1f}h since last fill. "
-                    f"Check collect-fills-loop service."
+                    f"Triggered one-time backfill (limit=500, pages=50)."
                 )
                 if on_stale_alert:
                     on_stale_alert(notification)
