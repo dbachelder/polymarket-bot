@@ -148,16 +148,15 @@ def _extract_btc_market(
 
 def _get_market_price(market: dict[str, Any], side: str) -> float | None:
     """Get price for a side of the market."""
+    from polymarket.clob import get_best_prices
+
     books = market.get("books", {})
     token_book = books.get(side, {})
 
     # Get best bid or ask depending on what we want
-    bids = token_book.get("bids", [])
-    asks = token_book.get("asks", [])
+    best_bid, best_ask = get_best_prices(token_book)
 
-    if bids and asks:
-        best_bid = float(bids[0]["price"]) if bids else 0
-        best_ask = float(asks[0]["price"]) if asks else 0
+    if best_bid is not None and best_ask is not None:
         return _calculate_mid_price(best_bid, best_ask)
 
     return None
