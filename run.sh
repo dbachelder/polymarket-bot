@@ -118,6 +118,12 @@ case "${1:-}" in
         shift
         $PYTHON -m polymarket.cli discounted-outcome-performance "$@"
         ;;
+    btc-preclose-paper-loop)
+        shift
+        # Default snapshots-dir to data/ (where 5m snapshots are written by collect-15m-loop)
+        # rather than data/paper_trading/ where fills are stored
+        $PYTHON -m polymarket.cli btc-preclose-paper-loop --snapshots-dir data "$@"
+        ;;
     shell)
         # Drop into a shell with the venv activated
         exec bash --rcfile <(echo 'source "$SCRIPT_DIR/.venv/bin/activate"; cd "$SCRIPT_DIR"')
@@ -154,6 +160,7 @@ case "${1:-}" in
         echo "  cross-market-report Generate cross-market arbitrage performance report"
         echo "  discounted-outcome-scan  Scan for discounted outcome arbitrage"
         echo "  discounted-outcome-performance  Show discounted outcome performance"
+        echo "  btc-preclose-paper-loop  Run BTC pre-close paper trading loop"
         echo ""
         echo "Utility commands:"
         echo "  shell              Open shell with venv activated"
@@ -162,6 +169,7 @@ case "${1:-}" in
         echo "Examples:"
         echo "  $0 collect-15m-loop --out data --interval-seconds 60"
         echo "  $0 collect-fills-loop --interval-seconds 300 --stale-alert-hours 6"
+        echo "  $0 btc-preclose-paper-loop --data-dir data/paper_trading --loop-duration-minutes 1440"
         echo "  $0 markets-15m --limit 20"
         echo "  $0 pnl-verify --input data/fills.json --books data/books.json"
         exit 1
