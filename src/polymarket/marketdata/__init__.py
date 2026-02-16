@@ -148,8 +148,7 @@ class Snapshot:
             provider=data.get("provider", "unknown"),
             trades=[AggTrade.from_dict(t) for t in data.get("trades", [])],
             klines={
-                k: (Kline.from_dict(v) if v else None)
-                for k, v in data.get("klines", {}).items()
+                k: (Kline.from_dict(v) if v else None) for k, v in data.get("klines", {}).items()
             },
         )
 
@@ -286,14 +285,17 @@ class MarketDataProvider(ABC):
 
 class ProviderError(Exception):
     """Base exception for provider errors."""
+
     pass
 
 
 class ProviderUnavailableError(ProviderError):
     """Raised when a provider is unavailable (e.g., HTTP 451, 503)."""
+
     pass
 
 
 class ProviderRateLimitError(ProviderError):
     """Raised when rate limit is hit."""
+
     pass

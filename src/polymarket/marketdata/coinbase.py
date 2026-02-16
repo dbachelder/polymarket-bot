@@ -244,11 +244,11 @@ class CoinbaseProvider(MarketDataProvider):
                     close_time_ms=close_time_ms,
                     open_price=float(item[3]),  # index 3 is open
                     high_price=float(item[2]),  # index 2 is high
-                    low_price=float(item[1]),   # index 1 is low
-                    close_price=float(item[4]), # index 4 is close
+                    low_price=float(item[1]),  # index 1 is low
+                    close_price=float(item[4]),  # index 4 is close
                     volume=float(item[5]),
                     quote_volume=0.0,  # Not provided by Coinbase
-                    trades_count=0,    # Not provided by Coinbase
+                    trades_count=0,  # Not provided by Coinbase
                     taker_buy_volume=0.0,  # Not provided
                     taker_buy_quote_volume=0.0,  # Not provided
                 )

@@ -80,7 +80,7 @@ This is useful for:
 
 ### Cron Usage
 
-When running from cron, use the full path to the polymarket-bot venv:
+When running from cron, use the dedicated polymarket-bot venv (not axiom-trader's):
 
 ```bash
 # Example crontab entry (runs every minute)
@@ -94,6 +94,7 @@ Or use the run.sh script (recommended - handles venv automatically):
 ```
 
 See [docs/ops.md](docs/ops.md) for complete cron setup, monitoring, and troubleshooting.
+
 ### All Available Commands
 
 Run `./run.sh` without arguments to see the full list of commands.

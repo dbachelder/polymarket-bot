@@ -105,11 +105,65 @@ def cmd_collect_5m(args: argparse.Namespace) -> None:
         print(str(out))
 
 
+def cmd_collect_weather(args: argparse.Namespace) -> None:
+    from .collector_weather import collect_weather_snapshot
+
+    out = collect_weather_snapshot(Path(args.out))
+    print(str(out))
+
+
 def cmd_collect_15m(args: argparse.Namespace) -> None:
     from .collector import collect_15m_snapshot
 
     out = collect_15m_snapshot(Path(args.out))
     print(str(out))
+
+
+def cmd_collect_top(args: argparse.Namespace) -> None:
+    from .collector_top import collect_top_snapshot
+
+    out = collect_top_snapshot(
+        Path(args.out),
+        limit=int(args.limit),
+        offset=int(args.offset),
+        search=args.search,
+    )
+    print(str(out))
+
+
+def cmd_btc_preclose_paper(args: argparse.Namespace) -> None:
+    from decimal import Decimal
+    from pathlib import Path
+
+    from .strategy_btc_preclose import run_btc_preclose_paper
+
+    out = run_btc_preclose_paper(
+        data_dir=Path(args.data_dir),
+        window_seconds=int(args.window_seconds),
+        cheap_price=Decimal(str(args.cheap_price)),
+        size=Decimal(str(args.size)),
+        starting_cash=Decimal(str(args.starting_cash)),
+    )
+
+    if args.format == "json":
+        print(json.dumps(out, indent=2))
+    else:
+        print("=" * 70)
+        print("BTC PRE-CLOSE PAPER TRIGGER")
+        print("=" * 70)
+        print(
+            f"Window: {out['window_seconds']}s | Cheap <= {out['cheap_price']} | Size {out['size']}"
+        )
+        print(f"Markets scanned: {out['markets_scanned']}")
+        print(f"Near close:      {out['candidates_near_close']}")
+        print(f"Fills recorded:  {out['fills_recorded']}")
+        if out["triggers"]:
+            print("\n--- Triggers ---")
+            for t in out["triggers"][:10]:
+                print(
+                    f"  {t['side']:<3} {t['price']:>5} | ttc={t['time_to_close_seconds']:>6}s | {t['market_slug']}"
+                )
+        print("=" * 70)
 
 
 def cmd_universe_5m(args: argparse.Namespace) -> None:
@@ -993,8 +1047,12 @@ def cmd_news_momentum_scan(args: argparse.Namespace) -> None:
                     f"  {sig['side']:<12} | edge={sig['edge']:+.2f} | "
                     f"conf={sig['confidence']:.1%} | {market_q}..."
                 )
-                print(f"    Current: {sig['current_price']:.3f} -> Target: {sig['target_price']:.3f}")
-                print(f"    Source: {sig['news_source']} | {sig['time_since_news_seconds']:.0f}s ago")
+                print(
+                    f"    Current: {sig['current_price']:.3f} -> Target: {sig['target_price']:.3f}"
+                )
+                print(
+                    f"    Source: {sig['news_source']} | {sig['time_since_news_seconds']:.0f}s ago"
+                )
 
         if result["trades"]:
             print("\n--- Executed Trades ---")
@@ -1027,20 +1085,25 @@ def cmd_news_momentum_positions(args: argparse.Namespace) -> None:
     open_positions = tracker.get_open_positions()
 
     if args.format == "json":
-        print(json.dumps({
-            "summary": summary,
-            "open_positions": [
+        print(
+            json.dumps(
                 {
-                    "position_id": p.position_id,
-                    "market": p.market_question,
-                    "side": p.side,
-                    "entry_price": p.entry_price,
-                    "position_size": p.position_size,
-                }
-                for p in open_positions
-            ],
-            "exits_today": exits,
-        }, indent=2))
+                    "summary": summary,
+                    "open_positions": [
+                        {
+                            "position_id": p.position_id,
+                            "market": p.market_question,
+                            "side": p.side,
+                            "entry_price": p.entry_price,
+                            "position_size": p.position_size,
+                        }
+                        for p in open_positions
+                    ],
+                    "exits_today": exits,
+                },
+                indent=2,
+            )
+        )
     else:
         print("=" * 70)
         print("NEWS-DRIVEN MOMENTUM POSITIONS")
@@ -1063,7 +1126,94 @@ def cmd_news_momentum_positions(args: argparse.Namespace) -> None:
         if exits:
             print(f"\n--- Exits Triggered ({len(exits)}) ---")
             for exit_info in exits:
-                print(f"  {exit_info['position_id']}: {exit_info['reason']} | PnL: ${exit_info['pnl']:.2f}")
+                print(
+                    f"  {exit_info['position_id']}: {exit_info['reason']} | PnL: ${exit_info['pnl']:.2f}"
+                )
+
+        print("\n" + "=" * 70)
+
+
+def cmd_no_bias_scan(args: argparse.Namespace) -> None:
+    """Scan for NO bias exploit opportunities in phrase-based markets."""
+    from pathlib import Path
+
+    from .strategy_no_bias import run_no_bias_scan
+
+    snapshots_dir = Path(args.snapshots_dir) if args.snapshots_dir else None
+
+    result = run_no_bias_scan(
+        snapshots_dir=snapshots_dir,
+        bankroll=args.bankroll,
+        dry_run=not args.live,
+        max_positions=args.max_positions,
+        min_mispricing_ratio=args.min_mispricing_ratio,
+        min_volume_usd=args.min_volume,
+        max_yes_price=args.max_yes_price,
+        min_edge=args.min_edge,
+    )
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        print("=" * 70)
+        print("NO BIAS EXPLOIT SCAN RESULTS")
+        print("=" * 70)
+        print(f"Scan time: {result['timestamp']}")
+        print(f"Markets analyzed: {result['markets_analyzed']}")
+        print(f"Signals generated: {result['signals_generated']}")
+        print(f"Positions taken: {result['positions_taken']}")
+        print(f"Capital deployed: ${result['total_capital_deployed']:,.2f}")
+        print(f"Dry run: {result['dry_run']}")
+
+        if result['signals']:
+            print("\n--- Top Signals ---")
+            for sig in result['signals'][:10]:
+                print(f"\n  {sig['market_question'][:50]}...")
+                print(f"    Vertical: {sig['vertical']}")
+                print(f"    YES ask: {sig['yes_ask']:.1%} | Base rate: {sig['base_rate']:.1%}")
+                print(f"    Mispricing: {sig['mispricing_ratio']:.1f}x | Edge: {sig['edge']:.1%}")
+                print(f"    Confidence: {sig['confidence']:.1%} | Volume: ${sig['volume_usd']:,.0f}")
+
+        print("\n" + "=" * 70)
+
+
+def cmd_no_bias_positions(args: argparse.Namespace) -> None:
+    """Show NO bias positions and performance."""
+    from pathlib import Path
+
+    from .strategy_no_bias import NoBiasTracker, get_no_bias_performance
+
+    data_dir = Path(args.data_dir) if args.data_dir else None
+    tracker = NoBiasTracker(data_dir=data_dir)
+    result = get_no_bias_performance(tracker)
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        print("=" * 70)
+        print("NO BIAS EXPLOIT POSITIONS")
+        print("=" * 70)
+
+        summary = result['summary']
+        print("\n--- Performance Summary ---")
+        print(f"Total trades:     {summary['total_trades']}")
+        print(f"Win rate:         {summary['win_rate']:.1%}")
+        print(f"Total PnL:        ${summary['total_pnl']:,.2f}")
+        print(f"Avg PnL/trade:    ${summary['avg_pnl']:,.2f}")
+
+        if summary.get('by_vertical'):
+            print("\n--- By Vertical ---")
+            for vertical, stats in summary['by_vertical'].items():
+                print(f"  {vertical}: {stats['trades']} trades, "
+                      f"{stats['win_rate']:.1%} WR, ${stats['total_pnl']:,.2f}")
+
+        if result['open_positions']:
+            print(f"\n--- Open Positions ({result['open_count']}) ---")
+            for p in result['open_positions']:
+                print(f"\n  {p['position_id']}")
+                print(f"    Market: {p['market'][:50]}...")
+                print(f"    Vertical: {p['vertical']} | Entry: {p['entry_price']:.3f}")
+                print(f"    Size: ${p['position_size']:,.2f} | Edge: {p['expected_edge']:.1%}")
 
         print("\n" + "=" * 70)
 
@@ -1088,8 +1238,6 @@ def cmd_watchdog(args: argparse.Namespace) -> None:
         print(f"{status}: {result['message']}")
         if result["age_seconds"] is not None:
             print(f"  Age: {result['age_seconds']:.1f}s (max: {args.max_age_seconds}s)")
-        if result.get("last_successful_snapshot"):
-            print(f"  Last successful snapshot: {result['last_successful_snapshot']}")
         print(f"  Collector running: {result['collector_running']}")
         if result["collector_pid"]:
             print(f"  PID: {result['collector_pid']}")
@@ -1342,6 +1490,7 @@ def cmd_collect_fills(args: argparse.Namespace) -> None:
     since = None
     if args.since:
         from datetime import datetime
+
         since = datetime.fromisoformat(args.since.replace("Z", "+00:00"))
 
     result = collect_fills(
@@ -1408,9 +1557,11 @@ def cmd_pnl_health(args: argparse.Namespace) -> None:
         print(f"  Exists:         {fills['exists']}")
         print(f"  Total fills:    {fills.get('total_fills', 0)}")
         print(f"  Last fill:      {fills.get('last_fill_at') or 'N/A'}")
-        if fills.get('age_seconds') is not None:
-            age_hours = fills['age_seconds'] / 3600
-            print(f"  Age:            {age_hours:.1f}h (max: {fills['max_age_seconds']/3600:.1f}h)")
+        if fills.get("age_seconds") is not None:
+            age_hours = fills["age_seconds"] / 3600
+            print(
+                f"  Age:            {age_hours:.1f}h (max: {fills['max_age_seconds'] / 3600:.1f}h)"
+            )
         print()
 
         pnl = result["pnl"]
@@ -1418,9 +1569,9 @@ def cmd_pnl_health(args: argparse.Namespace) -> None:
         print(f"  Exists:         {pnl['exists']}")
         print(f"  Latest file:    {pnl.get('latest_file') or 'N/A'}")
         print(f"  Latest date:    {pnl.get('latest_date') or 'N/A'}")
-        if pnl.get('age_seconds') is not None:
-            age_hours = pnl['age_seconds'] / 3600
-            print(f"  Age:            {age_hours:.1f}h (max: {pnl['max_age_seconds']/3600:.1f}h)")
+        if pnl.get("age_seconds") is not None:
+            age_hours = pnl["age_seconds"] / 3600
+            print(f"  Age:            {age_hours:.1f}h (max: {pnl['max_age_seconds'] / 3600:.1f}h)")
         print()
 
         if result["warnings"]:
@@ -1430,6 +1581,83 @@ def cmd_pnl_health(args: argparse.Namespace) -> None:
 
     # Exit with error code if unhealthy and --fail is set
     if args.fail and not result["healthy"]:
+        raise SystemExit(1)
+
+
+def cmd_pnl_sanity_check(args: argparse.Namespace) -> None:
+    """Run NAV/PnL sanity check to detect impossible PnL jumps."""
+    from decimal import Decimal
+    from pathlib import Path
+
+    from .pnl_sanity_check import check_pnl_sanity
+
+    result = check_pnl_sanity(
+        data_dir=Path(args.data_dir),
+        snapshot_path=Path(args.snapshot) if args.snapshot else None,
+        pnl_dir=Path(args.pnl_dir) if args.pnl_dir else None,
+        alert_threshold_usd=Decimal(str(args.alert_threshold_usd)),
+        starting_cash=Decimal(str(args.starting_cash)) if args.starting_cash else None,
+        max_pnl_age_hours=float(args.max_pnl_age_hours),
+    )
+
+    if args.format == "json":
+        print(result.to_json())
+    else:
+        status = "✓ PASSED" if result.passed else "✗ FAILED"
+        print("=" * 70)
+        print(f"NAV/PnL SANITY CHECK: {status}")
+        print("=" * 70)
+
+        print("\n--- Computed Values (from fills + current mid) ---")
+        print(f"  Realized PnL:   ${float(result.computed_realized_pnl):,.2f}")
+        print(f"  Unrealized PnL: ${float(result.computed_unrealized_pnl):,.2f}")
+        print(f"  Net PnL:        ${float(result.computed_net_pnl):,.2f}")
+        print(f"  Cash Balance:   ${float(result.computed_cash_balance):,.2f}")
+        print(f"  Mark to Mid:    ${float(result.computed_mark_to_mid):,.2f}")
+        print(f"  Fills Count:    {result.fills_count}")
+
+        if result.previous_timestamp:
+            print("\n--- Previous Values ---")
+            prev_realized = (
+                result.previous_realized_pnl
+                if result.previous_realized_pnl is not None
+                else Decimal("0")
+            )
+            prev_unrealized = (
+                result.previous_unrealized_pnl
+                if result.previous_unrealized_pnl is not None
+                else Decimal("0")
+            )
+            prev_net = (
+                result.previous_net_pnl if result.previous_net_pnl is not None else Decimal("0")
+            )
+            print(f"  Realized PnL:   ${float(prev_realized):,.2f}")
+            print(f"  Unrealized PnL: ${float(prev_unrealized):,.2f}")
+            print(f"  Net PnL:        ${float(prev_net):,.2f}")
+            print(f"  Timestamp:      {result.previous_timestamp}")
+            if result.time_since_previous_hours:
+                print(f"  Age:            {result.time_since_previous_hours:.1f}h")
+
+            print("\n--- Deltas ---")
+            delta_str = f"{float(result.realized_pnl_delta):+,.2f}"
+            print(f"  Realized PnL:   ${delta_str}")
+            delta_str = f"{float(result.unrealized_pnl_delta):+,.2f}"
+            print(f"  Unrealized PnL: ${delta_str}")
+            delta_str = f"{float(result.net_pnl_delta):+,.2f}"
+            print(f"  Net PnL:        ${delta_str}")
+
+        if result.alerts:
+            print(f"\n--- ALERTS ({len(result.alerts)}) ---")
+            for alert in result.alerts:
+                print(f"  ⚠ {alert}")
+        else:
+            print("\n--- ALERTS ---")
+            print("  ✓ No alerts detected")
+
+        print("\n" + "=" * 70)
+
+    # Exit with error code if check failed and --fail is set
+    if args.fail and not result.passed:
         raise SystemExit(1)
 
 
@@ -1692,6 +1920,10 @@ def main() -> None:
     )
     pc.set_defaults(func=cmd_collect_5m)
 
+    pw = sub.add_parser("collect-weather", help="Snapshot /predictions/weather + CLOB orderbooks")
+    pw.add_argument("--out", default="data")
+    pw.set_defaults(func=cmd_collect_weather)
+
     pu = sub.add_parser("universe-5m", help="Build normalized market universe from /predictions/5M")
     pu.add_argument("--out", default="data/universe.json", help="Output JSON file path")
     pu.add_argument("--cross-check", action="store_true", help="Verify against Gamma API")
@@ -1704,6 +1936,16 @@ def main() -> None:
     pc15 = sub.add_parser("collect-15m", help="Snapshot /crypto/15M + CLOB orderbooks")
     pc15.add_argument("--out", default="data")
     pc15.set_defaults(func=cmd_collect_15m)
+
+    pct = sub.add_parser(
+        "collect-top",
+        help="Snapshot a broad set of active markets via Gamma API + CLOB orderbooks",
+    )
+    pct.add_argument("--out", default="data")
+    pct.add_argument("--limit", type=int, default=200)
+    pct.add_argument("--offset", type=int, default=0)
+    pct.add_argument("--search", type=str, default=None)
+    pct.set_defaults(func=cmd_collect_top)
 
     pc15l = sub.add_parser(
         "collect-15m-loop", help="Continuously snapshot /crypto/15M + CLOB orderbooks"
@@ -1978,6 +2220,57 @@ def main() -> None:
         help="Exit with error code if unhealthy",
     )
     ph.set_defaults(func=cmd_pnl_health)
+
+    # PnL sanity check command
+    psc = sub.add_parser(
+        "pnl-sanity-check",
+        help="Run NAV/PnL sanity check to detect impossible PnL jumps",
+    )
+    psc.add_argument(
+        "--data-dir",
+        default="data",
+        help="Data directory (default: data)",
+    )
+    psc.add_argument(
+        "--snapshot",
+        default=None,
+        help="Path to snapshot file for current prices (default: data/latest_15m.json)",
+    )
+    psc.add_argument(
+        "--pnl-dir",
+        default=None,
+        help="Directory for PnL summaries (default: data/pnl)",
+    )
+    psc.add_argument(
+        "--alert-threshold-usd",
+        type=float,
+        default=100.0,
+        help="Threshold for alerting on PnL jumps in USD (default: 100.0)",
+    )
+    psc.add_argument(
+        "--starting-cash",
+        type=float,
+        default=None,
+        help="Starting cash balance (default: 0)",
+    )
+    psc.add_argument(
+        "--max-pnl-age-hours",
+        type=float,
+        default=24.0,
+        help="Maximum age of previous PnL summary in hours (default: 24)",
+    )
+    psc.add_argument(
+        "--format",
+        choices=["json", "human"],
+        default="human",
+        help="Output format",
+    )
+    psc.add_argument(
+        "--fail",
+        action="store_true",
+        help="Exit with error code if sanity check fails",
+    )
+    psc.set_defaults(func=cmd_pnl_sanity_check)
 
     ms = sub.add_parser("microstructure", help="Analyze market microstructure from snapshot")
     ms.add_argument(
@@ -2565,6 +2858,20 @@ def main() -> None:
         "--format", choices=["json", "human"], default="human", help="Output format"
     )
     paper_bt.set_defaults(func=cmd_paper_backtest)
+
+    # BTC pre-close cheap-side trigger (paper)
+    btcpc = sub.add_parser(
+        "btc-preclose-paper",
+        help="Paper-trade cheap-side trigger on BTC 5m markets near close",
+    )
+    btcpc.add_argument("--data-dir", default="data/paper_trading", help="Paper trading data dir")
+    btcpc.add_argument("--window-seconds", type=int, default=60)
+    btcpc.add_argument("--cheap-price", type=float, default=0.03)
+    btcpc.add_argument("--size", type=float, default=1.0)
+    btcpc.add_argument("--starting-cash", type=float, default=0.0)
+    btcpc.add_argument("--format", choices=["json", "human"], default="human")
+    btcpc.set_defaults(func=cmd_btc_preclose_paper)
+
     # Combinatorial arbitrage command
     cb = sub.add_parser(
         "combinatorial-scan",
@@ -2748,6 +3055,74 @@ def main() -> None:
     )
     nmp.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     nmp.set_defaults(func=cmd_news_momentum_positions)
+
+    # NO bias exploit commands
+    nb = sub.add_parser(
+        "no-bias-scan",
+        help="Scan for NO bias exploit opportunities in phrase-based markets",
+    )
+    nb.add_argument(
+        "--snapshots-dir",
+        type=str,
+        default=None,
+        help="Directory containing market snapshots",
+    )
+    nb.add_argument(
+        "--bankroll",
+        type=float,
+        default=10000,
+        help="Available capital in USD (default: 10000)",
+    )
+    nb.add_argument(
+        "--max-positions",
+        type=int,
+        default=10,
+        help="Maximum positions to take (default: 10)",
+    )
+    nb.add_argument(
+        "--live",
+        action="store_true",
+        help="Execute live trades (default: dry-run)",
+    )
+    nb.add_argument(
+        "--min-mispricing-ratio",
+        type=float,
+        default=3.0,
+        help="Minimum YES_price/base_rate ratio (default: 3.0)",
+    )
+    nb.add_argument(
+        "--min-volume",
+        type=float,
+        default=10000,
+        help="Minimum market volume USD (default: 10000)",
+    )
+    nb.add_argument(
+        "--max-yes-price",
+        type=float,
+        default=0.30,
+        help="Maximum YES price to consider (default: 0.30)",
+    )
+    nb.add_argument(
+        "--min-edge",
+        type=float,
+        default=0.05,
+        help="Minimum expected edge (default: 0.05 = 5%%)",
+    )
+    nb.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    nb.set_defaults(func=cmd_no_bias_scan)
+
+    nbp = sub.add_parser(
+        "no-bias-positions",
+        help="Show NO bias positions and performance",
+    )
+    nbp.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Data directory for position tracking",
+    )
+    nbp.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    nbp.set_defaults(func=cmd_no_bias_positions)
 
     # Add trader profiling commands
     from .trader_cli import add_trader_commands
