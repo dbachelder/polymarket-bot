@@ -25,11 +25,15 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from .config import PolymarketConfig
 
 logger = logging.getLogger(__name__)
 
@@ -255,6 +259,12 @@ class NoBiasPosition:
     entry_no_price: float
     position_size_usd: float
     expected_edge: float
+
+    # Order tracking (for live trading)
+    order_id: str | None = None
+    order_status: str | None = None  # 'pending', 'filled', 'failed', 'dry_run'
+    fill_price: float | None = None
+    contracts: float | None = None
 
     # Exit tracking
     exit_price: float | None = None
@@ -701,6 +711,10 @@ class NoBiasTracker:
                     "position_size": pos.position_size_usd,
                     "is_open": pos.is_open,
                     "pnl": pos.pnl,
+                    "order_id": pos.order_id,
+                    "order_status": pos.order_status,
+                    "fill_price": pos.fill_price,
+                    "contracts": pos.contracts,
                 }
                 for pid, pos in self.positions.items()
             },
@@ -728,6 +742,7 @@ class NoBiasTracker:
         signal: NoBiasSignal,
         bankroll: float,
         dry_run: bool = True,
+        config: PolymarketConfig | None = None,
     ) -> NoBiasPosition | None:
         """Open a new position from a signal.
 
@@ -735,6 +750,7 @@ class NoBiasTracker:
             signal: NO bias signal
             bankroll: Available capital
             dry_run: If True, don't actually trade
+            config: Optional PolymarketConfig for live trading
 
         Returns:
             NoBiasPosition if opened, None otherwise
@@ -757,19 +773,129 @@ class NoBiasTracker:
             entry_no_price=signal.no_bid,
             position_size_usd=position_size,
             expected_edge=signal.edge,
+            contracts=position_size / signal.no_bid if signal.no_bid > 0 else 0,
         )
 
-        if not dry_run:
-            # Would execute trade here
+        if dry_run:
+            position.order_status = "dry_run"
             logger.info(
-                "Executing NO buy: %s at %.3f, size=$%.2f",
+                "[DRY-RUN] Would buy NO: %s at %.3f, size=$%.2f (%.2f contracts)",
                 signal.market_question[:50],
                 signal.no_bid,
                 position_size,
+                position.contracts or 0,
             )
+        else:
+            # Live trading: submit order via trading module
+            position = self._submit_live_order(position, signal, config)
+            if position.order_status == "failed":
+                # Don't save failed positions
+                logger.error(
+                    "Failed to open position for %s: %s",
+                    signal.market_question[:50],
+                    position.order_id,  # Stores error message on failure
+                )
+                return None
 
         self.positions[position_id] = position
         self._save_positions()
+
+        return position
+
+    def _submit_live_order(
+        self,
+        position: NoBiasPosition,
+        signal: NoBiasSignal,
+        config: PolymarketConfig | None = None,
+    ) -> NoBiasPosition:
+        """Submit live order to Polymarket CLOB.
+
+        Args:
+            position: The position to open
+            signal: The signal that generated this position
+            config: Optional PolymarketConfig
+
+        Returns:
+            Updated position with order details
+        """
+        from .trading import Order, submit_order
+
+        if config is None:
+            from .config import load_config
+
+            config = load_config()
+
+        # Calculate order size in contracts
+        # NO price = signal.no_bid, position size in USD
+        # contracts = USD / price per contract
+        contracts = position.position_size_usd / signal.no_bid
+
+        # Polymarket has minimum order size constraints
+        # Ensure we meet minimums (typically around $1-5 worth)
+        min_contracts = 1.0  # Minimum 1 contract
+        if contracts < min_contracts:
+            logger.warning(
+                "Order size too small: %.4f contracts, adjusting to %.1f",
+                contracts,
+                min_contracts,
+            )
+            contracts = min_contracts
+
+        # Round to reasonable precision (Polymarket uses 2 decimals for size)
+        contracts = round(contracts, 2)
+
+        # Price must be between 0.01 and 0.99
+        # We buy NO at the current bid (which is 1 - YES ask)
+        order_price = round(signal.no_bid, 2)
+        order_price = max(0.01, min(0.99, order_price))
+
+        try:
+            order = Order(
+                token_id=signal.token_id_no,
+                side="buy",
+                size=Decimal(str(contracts)),
+                price=Decimal(str(order_price)),
+            )
+        except ValueError as e:
+            logger.exception("Invalid order parameters: %s", e)
+            position.order_status = "failed"
+            position.order_id = f"validation_error: {e}"
+            return position
+
+        logger.info(
+            "Submitting live order: buy %s NO at %.2f, size=%.2f contracts ($%.2f)",
+            signal.market_question[:50],
+            order_price,
+            contracts,
+            position.position_size_usd,
+        )
+
+        try:
+            result = submit_order(order, config)
+        except Exception as e:
+            logger.exception("Order submission failed: %s", e)
+            position.order_status = "failed"
+            position.order_id = f"exception: {e}"
+            return position
+
+        if result.success:
+            position.order_id = result.order_id
+            position.order_status = "filled" if not result.dry_run else "dry_run"
+            position.fill_price = float(order_price)
+
+            logger.info(
+                "Order submitted successfully: %s (order_id: %s)",
+                result.message,
+                result.order_id,
+            )
+        else:
+            position.order_status = "failed"
+            position.order_id = result.message[:255]  # Truncate long error messages
+
+            logger.error(
+                "Order submission failed: %s",
+                result.message,
+            )
 
         return position
 
@@ -824,6 +950,7 @@ def run_no_bias_scan(
     min_volume_usd: float = 10000.0,
     max_yes_price: float = 0.30,
     min_edge: float = 0.05,
+    config: PolymarketConfig | None = None,
 ) -> dict[str, Any]:
     """Run complete NO bias scan and execute trades.
 
@@ -836,6 +963,7 @@ def run_no_bias_scan(
         min_volume_usd: Minimum market volume
         max_yes_price: Maximum YES price to consider
         min_edge: Minimum expected edge
+        config: Optional PolymarketConfig for live trading
 
     Returns:
         Dictionary with scan results and trades
@@ -872,7 +1000,7 @@ def run_no_bias_scan(
     positions: list[NoBiasPosition] = []
 
     for signal in result.signals[:max_positions]:
-        position = tracker.open_position(signal, bankroll, dry_run=dry_run)
+        position = tracker.open_position(signal, bankroll, dry_run=dry_run, config=config)
         if position:
             positions.append(position)
             logger.info(
@@ -915,6 +1043,10 @@ def get_no_bias_performance(tracker: NoBiasTracker | None = None) -> dict[str, A
                 "entry_price": p.entry_no_price,
                 "position_size": p.position_size_usd,
                 "expected_edge": p.expected_edge,
+                "order_id": p.order_id,
+                "order_status": p.order_status,
+                "fill_price": p.fill_price,
+                "contracts": p.contracts,
             }
             for p in open_positions
         ],

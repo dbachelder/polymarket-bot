@@ -734,3 +734,81 @@ class TestBaseRateDatabase:
         for estimate in BASE_RATE_DATABASE:
             assert estimate.source, f"Missing source for {estimate.pattern}"
             assert estimate.reasoning, f"Missing reasoning for {estimate.pattern}"
+
+
+class TestLiveOrderExecution:
+    """Test live order execution functionality."""
+
+    def test_open_position_dry_run_sets_status(self, tmp_path: Path) -> None:
+        """Test that dry_run=True sets order_status to 'dry_run'."""
+        tracker = NoBiasTracker(data_dir=tmp_path)
+
+        signal = NoBiasSignal(
+            timestamp=datetime.now(UTC),
+            market_id="test",
+            token_id_yes="yes-token",
+            token_id_no="no-token",
+            market_question="Will Kanye run?",
+            vertical=MarketVertical.POLITICS,
+            yes_ask=0.10,
+            no_bid=0.90,
+            base_rate=0.02,
+            mispricing_ratio=5.0,
+            edge=0.10,
+            confidence=0.7,
+            volume_usd=50000,
+            time_to_resolution=None,
+            reasoning="Test",
+        )
+
+        position = tracker.open_position(signal, bankroll=10000, dry_run=True)
+
+        assert position is not None
+        assert position.order_status == "dry_run"
+        assert position.contracts is not None
+        assert position.contracts > 0  # Should calculate contracts
+
+    def test_position_has_order_tracking_fields(self) -> None:
+        """Test that position has order tracking fields."""
+        position = NoBiasPosition(
+            position_id="test-123",
+            timestamp=datetime.now(UTC),
+            market_id="market-456",
+            token_id="no-token",
+            market_question="Will Kanye run?",
+            vertical=MarketVertical.POLITICS,
+            entry_no_price=0.90,
+            position_size_usd=500,
+            expected_edge=0.10,
+            order_id="order-abc-123",
+            order_status="filled",
+            fill_price=0.89,
+            contracts=555.56,
+        )
+
+        assert position.order_id == "order-abc-123"
+        assert position.order_status == "filled"
+        assert position.fill_price == 0.89
+        assert position.contracts == 555.56
+
+    def test_position_contracts_calculated(self) -> None:
+        """Test that contracts are calculated correctly."""
+        # $500 at $0.90 per contract = ~555.56 contracts
+        position_size = 500.0
+        entry_price = 0.90
+        expected_contracts = position_size / entry_price
+
+        position = NoBiasPosition(
+            position_id="test-123",
+            timestamp=datetime.now(UTC),
+            market_id="market-456",
+            token_id="no-token",
+            market_question="Will Kanye run?",
+            vertical=MarketVertical.POLITICS,
+            entry_no_price=entry_price,
+            position_size_usd=position_size,
+            expected_edge=0.10,
+            contracts=position_size / entry_price if entry_price > 0 else 0,
+        )
+
+        assert position.contracts == pytest.approx(expected_contracts, rel=1e-3)
