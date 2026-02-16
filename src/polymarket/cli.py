@@ -1306,6 +1306,114 @@ def cmd_no_bias_positions(args: argparse.Namespace) -> None:
         print("\n" + "=" * 70)
 
 
+def cmd_discounted_outcome_scan(args: argparse.Namespace) -> None:
+    """Scan for discounted outcome arbitrage opportunities."""
+    from pathlib import Path
+
+    from .strategy_discounted_outcome import run_discounted_arbitrage_scan
+
+    result = run_discounted_arbitrage_scan(
+        snapshots_dir=Path(args.snapshots_dir),
+        data_dir=Path(args.data_dir) if args.data_dir else None,
+        dry_run=not args.live,
+        max_positions=args.max_positions,
+    )
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        print("=" * 70)
+        print("DISCOUNTED OUTCOME ARBITRAGE SCAN")
+        print("=" * 70)
+        print(f"Scan time: {result['timestamp']}")
+        print(f"Snapshot: {result['snapshot']}")
+        print(f"Markets discounted: {result['markets_discounted']}")
+
+        if result.get('by_vertical'):
+            print("\n--- By Vertical ---")
+            for vertical, count in result['by_vertical'].items():
+                print(f"  {vertical}: {count} markets")
+
+        print(f"\nSignals confirmed: {result['signals_confirmed']}")
+        print(f"Signals non-confirmed: {result['signals_non_confirmed']}")
+        print(f"Trades executed: {result['trades_executed']}")
+        print(f"Dry run: {result['dry_run']}")
+
+        if result.get('top_confirmed_signals'):
+            print("\n--- Top Confirmed Signals ---")
+            for sig in result['top_confirmed_signals'][:5]:
+                m = sig['market']
+                print(f"\n  {m['question'][:50]}...")
+                print(f"    Side: {m['discounted_side']} @ {m['discounted_price']:.3f}")
+                print(f"    Confidence: {sig['confidence_score']:.2f}")
+                print(f"    Insiders: {sig['confirmation_count']}")
+
+        if result.get('performance'):
+            perf = result['performance']
+            print("\n--- Performance Summary ---")
+            print(f"Total trades: {perf['total_trades']}")
+            print(f"Resolved: {perf['resolved_trades']}")
+            print(f"Overall win rate: {perf['overall_win_rate']:.1f}%")
+            print(f"Insider win rate: {perf['insider_win_rate']:.1f}%")
+            print(f"Non-insider win rate: {perf['non_insider_win_rate']:.1f}%")
+            print(f"Total PnL: ${perf['total_pnl']:,.2f}")
+
+        print("\n" + "=" * 70)
+
+
+def cmd_discounted_outcome_performance(args: argparse.Namespace) -> None:
+    """Show discounted outcome arbitrage performance."""
+    from pathlib import Path
+
+    from .strategy_discounted_outcome import DiscountedArbitrageTracker
+
+    data_dir = Path(args.data_dir) if args.data_dir else None
+    tracker = DiscountedArbitrageTracker(data_dir=data_dir)
+    perf = tracker.get_performance()
+    by_vertical = tracker.get_trades_by_vertical()
+
+    if args.format == "json":
+        print(json.dumps({
+            "performance": perf.to_dict(),
+            "by_vertical": {
+                v: [t.to_dict() for t in trades]
+                for v, trades in by_vertical.items()
+            }
+        }, indent=2))
+    else:
+        print("=" * 70)
+        print("DISCOUNTED OUTCOME ARBITRAGE PERFORMANCE")
+        print("=" * 70)
+
+        print("\n--- Overall Performance ---")
+        print(f"Total trades: {perf.total_trades}")
+        print(f"  Insider confirmed: {perf.insider_confirmed_trades}")
+        print(f"  Non-insider: {perf.non_insider_trades}")
+        print(f"\nResolved trades: {perf.resolved_trades}")
+        print(f"  Winning: {perf.winning_trades}")
+        print(f"  Losing: {perf.losing_trades}")
+        print(f"\nWin rates:")
+        print(f"  Overall: {perf.overall_win_rate:.1f}%")
+        print(f"  With insider: {perf.insider_win_rate:.1f}%")
+        print(f"  Without insider: {perf.non_insider_win_rate:.1f}%")
+        print(f"\nPnL:")
+        print(f"  Total: ${float(perf.total_pnl):,.2f}")
+        print(f"  Insider confirmed: ${float(perf.insider_pnl):,.2f}")
+        print(f"  Non-insider: ${float(perf.non_insider_pnl):,.2f}")
+        print(f"\nAvg hold time: {perf.avg_hold_time_hours:.1f}h")
+
+        if by_vertical:
+            print("\n--- By Vertical ---")
+            for vertical, trades in by_vertical.items():
+                resolved = [t for t in trades if t.resolved]
+                wins = [t for t in resolved if t.pnl and t.pnl > 0]
+                win_rate = (len(wins) / len(resolved) * 100) if resolved else 0
+                total_pnl = sum(t.pnl for t in resolved if t.pnl)
+                print(f"  {vertical}: {len(trades)} trades, {win_rate:.1f}% WR, ${float(total_pnl):,.2f}")
+
+        print("\n" + "=" * 70)
+
+
 def cmd_watchdog(args: argparse.Namespace) -> None:
     """Run collector watchdog to ensure data freshness."""
     from pathlib import Path
@@ -3239,6 +3347,50 @@ def main() -> None:
     )
     nbp.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     nbp.set_defaults(func=cmd_no_bias_positions)
+
+    # Discounted Outcome Arbitrage commands
+    do = sub.add_parser(
+        "discounted-outcome-scan",
+        help="Scan for discounted outcome arbitrage opportunities",
+    )
+    do.add_argument(
+        "--snapshots-dir",
+        type=str,
+        default="data",
+        help="Directory containing market snapshots (default: data)",
+    )
+    do.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Data directory for storing results",
+    )
+    do.add_argument(
+        "--max-positions",
+        type=int,
+        default=20,
+        help="Maximum positions to take (default: 20)",
+    )
+    do.add_argument(
+        "--live",
+        action="store_true",
+        help="Execute live trades (default: dry-run)",
+    )
+    do.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    do.set_defaults(func=cmd_discounted_outcome_scan)
+
+    do_perf = sub.add_parser(
+        "discounted-outcome-performance",
+        help="Show discounted outcome arbitrage performance",
+    )
+    do_perf.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Data directory for trade tracking",
+    )
+    do_perf.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    do_perf.set_defaults(func=cmd_discounted_outcome_performance)
 
     # Add trader profiling commands
     from .trader_cli import add_trader_commands
