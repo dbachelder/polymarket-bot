@@ -5,7 +5,7 @@ exclusive outcomes across different markets sum to less than $1.00 minus fees.
 
 Example: In a winner-take-all election with candidates A, B, C:
 - Market A: "Will A win?" YES = $0.30
-- Market B: "Will B win?" YES = $0.25  
+- Market B: "Will B win?" YES = $0.25
 - Market C: "Will C win?" YES = $0.20
 Sum = $0.75 → Buy all three for guaranteed $0.25 profit (before fees)
 
@@ -36,9 +36,10 @@ DEFAULT_MIN_LIQUIDITY = 100.0  # $100 minimum per outcome
 @dataclass(frozen=True)
 class BasketOutcome:
     """A single outcome in a Dutch book basket.
-    
+
     Represents one leg of the arbitrage - buying YES on a specific market.
     """
+
     market_id: str
     market_slug: str
     market_question: str
@@ -64,7 +65,7 @@ class BasketOutcome:
 @dataclass(frozen=True)
 class DutchBookBasket:
     """A basket of mutually exclusive outcomes forming a Dutch book.
-    
+
     Attributes:
         basket_id: Unique identifier for this basket
         event_id: Parent event ID
@@ -77,6 +78,7 @@ class DutchBookBasket:
         timestamp: When basket was analyzed
         notes: Additional context about the basket
     """
+
     basket_id: str
     event_id: str
     event_title: str
@@ -154,6 +156,7 @@ class DutchBookBasket:
 @dataclass(frozen=True)
 class CombinatorialScanResult:
     """Result of a combinatorial arbitrage scan."""
+
     timestamp: datetime
     events_scanned: int
     baskets_constructed: int
@@ -242,7 +245,7 @@ MANUAL_BASKET_DEFINITIONS: list[dict[str, Any]] = [
 
 def _get_best_asks(token_ids: list[str]) -> dict[str, dict[str, float]]:
     """Fetch best ask prices for a list of token IDs.
-    
+
     Returns dict mapping token_id -> {"ask": float, "bid": float, "liquidity": float}
     """
     results = {}
@@ -251,15 +254,15 @@ def _get_best_asks(token_ids: list[str]) -> dict[str, dict[str, float]]:
             book = get_book(token_id)
             asks = book.get("asks", [])
             bids = book.get("bids", [])
-            
+
             best_ask = float(asks[0]["price"]) if asks else None
             best_bid = float(bids[0]["price"]) if bids else None
-            
+
             # Estimate liquidity at best prices
             ask_liquidity = sum(float(a["size"]) for a in asks[:3]) if asks else 0
             bid_liquidity = sum(float(b["size"]) for b in bids[:3]) if bids else 0
             liquidity = min(ask_liquidity, bid_liquidity)
-            
+
             results[token_id] = {
                 "ask": best_ask,
                 "bid": best_bid,
@@ -268,7 +271,7 @@ def _get_best_asks(token_ids: list[str]) -> dict[str, dict[str, float]]:
         except Exception as e:
             logger.debug(f"Failed to fetch book for {token_id}: {e}")
             results[token_id] = {"ask": None, "bid": None, "liquidity": 0}
-    
+
     return results
 
 
@@ -290,7 +293,7 @@ def build_winner_take_all_basket(
     min_liquidity: float = DEFAULT_MIN_LIQUIDITY,
 ) -> DutchBookBasket | None:
     """Build a Dutch book basket from a winner-take-all event.
-    
+
     Args:
         event: Event dict from Gamma API
         relationship_type: Type of relationship
@@ -298,28 +301,28 @@ def build_winner_take_all_basket(
         fee_rate: Settlement fee rate
         min_edge: Minimum edge required
         min_liquidity: Minimum liquidity per outcome
-        
+
     Returns:
         DutchBookBasket if valid basket can be constructed, None otherwise
     """
     event_id = str(event.get("id", ""))
     event_title = event.get("title", "Unknown")
     markets = event.get("markets", [])
-    
+
     if len(markets) < 2:
         return None
-    
+
     # Sort markets by liquidity (descending) and take top N
     sorted_markets = sorted(
         markets,
         key=lambda m: float(m.get("liquidityNum", 0) or 0),
         reverse=True,
     )[:max_outcomes]
-    
+
     # Collect token IDs for batch price fetch
     token_ids = []
     market_data = []
-    
+
     for m in sorted_markets:
         clob_token_ids = m.get("clobTokenIds", "")
         if not clob_token_ids:
@@ -330,22 +333,24 @@ def build_winner_take_all_basket(
                 # tokens[0] is YES, tokens[1] is NO
                 yes_token = str(tokens[0])
                 token_ids.append(yes_token)
-                market_data.append({
-                    "market_id": str(m.get("id", "")),
-                    "slug": m.get("slug", ""),
-                    "question": m.get("question", ""),
-                    "yes_token": yes_token,
-                    "liquidity": float(m.get("liquidityNum", 0) or 0),
-                })
+                market_data.append(
+                    {
+                        "market_id": str(m.get("id", "")),
+                        "slug": m.get("slug", ""),
+                        "question": m.get("question", ""),
+                        "yes_token": yes_token,
+                        "liquidity": float(m.get("liquidityNum", 0) or 0),
+                    }
+                )
         except (json.JSONDecodeError, IndexError):
             continue
-    
+
     if len(market_data) < 2:
         return None
-    
+
     # Fetch prices
     prices = _get_best_asks(token_ids)
-    
+
     # Build outcomes
     outcomes = []
     for i, md in enumerate(market_data):
@@ -353,34 +358,36 @@ def build_winner_take_all_basket(
         best_ask = price_info.get("ask")
         best_bid = price_info.get("bid")
         liquidity = price_info.get("liquidity", 0)
-        
+
         if best_ask is None:
             continue
-        
+
         # Use max of estimated liquidity and reported liquidity
         effective_liquidity = max(liquidity, md["liquidity"])
-        
+
         if effective_liquidity < min_liquidity:
             continue
-        
-        outcomes.append(BasketOutcome(
-            market_id=md["market_id"],
-            market_slug=md["slug"],
-            market_question=md["question"],
-            token_id_yes=md["yes_token"],
-            best_ask_yes=best_ask,
-            best_bid_yes=best_bid or 0.0,
-            liquidity=effective_liquidity,
-            outcome_index=i,
-        ))
-    
+
+        outcomes.append(
+            BasketOutcome(
+                market_id=md["market_id"],
+                market_slug=md["slug"],
+                market_question=md["question"],
+                token_id_yes=md["yes_token"],
+                best_ask_yes=best_ask,
+                best_bid_yes=best_bid or 0.0,
+                liquidity=effective_liquidity,
+                outcome_index=i,
+            )
+        )
+
     if len(outcomes) < 2:
         return None
-    
+
     # Calculate basket metrics
     sum_best_ask = sum(o.best_ask_yes for o in outcomes)
     basket_id = f"{event_id}_{relationship_type}"
-    
+
     return DutchBookBasket(
         basket_id=basket_id,
         event_id=event_id,
@@ -404,10 +411,10 @@ def scan_combinatorial_opportunities(
     use_manual_definitions: bool = True,
 ) -> CombinatorialScanResult:
     """Scan for combinatorial arbitrage opportunities.
-    
+
     Phase 1 implementation: Uses manual basket definitions to identify
     winner-take-all events and construct Dutch book baskets.
-    
+
     Args:
         event_limit: Maximum events to fetch from API
         fee_rate: Settlement fee rate
@@ -415,32 +422,32 @@ def scan_combinatorial_opportunities(
         max_basket_size: Maximum outcomes per basket
         min_liquidity: Minimum liquidity per outcome
         use_manual_definitions: If True, use curated basket definitions
-        
+
     Returns:
         CombinatorialScanResult with all baskets and opportunities
     """
     timestamp = datetime.now(UTC)
     logger.info("Starting combinatorial arbitrage scan...")
-    
+
     # Fetch events
     events = get_events(active=True, limit=event_limit)
     logger.info(f"Fetched {len(events)} active events")
-    
+
     baskets: list[DutchBookBasket] = []
-    
+
     if use_manual_definitions:
         # Use manual definitions to find candidate events
         for definition in MANUAL_BASKET_DEFINITIONS:
             slug_prefix = definition["event_slug_starts_with"]
             relationship_type = definition["relationship_type"]
             max_outcomes = min(definition.get("max_outcomes", 10), max_basket_size)
-            
+
             # Find matching events
             for event in events:
                 event_slug = event.get("slug", "")
                 if event_slug.startswith(slug_prefix):
                     logger.info(f"Found event: {event.get('title')} ({relationship_type})")
-                    
+
                     basket = build_winner_take_all_basket(
                         event=event,
                         relationship_type=relationship_type,
@@ -449,7 +456,7 @@ def scan_combinatorial_opportunities(
                         min_edge=min_edge_after_fees,
                         min_liquidity=min_liquidity,
                     )
-                    
+
                     if basket:
                         baskets.append(basket)
                         logger.info(
@@ -457,15 +464,13 @@ def scan_combinatorial_opportunities(
                             f"sum={basket.sum_best_ask:.4f}, "
                             f"net_profit={basket.net_profit:.4f}"
                         )
-    
+
     # Filter profitable baskets
     profitable_baskets = [b for b in baskets if b.is_profitable]
     profitable_baskets.sort(key=lambda b: b.net_profit, reverse=True)
-    
-    logger.info(
-        f"Scan complete: {len(baskets)} baskets, {len(profitable_baskets)} profitable"
-    )
-    
+
+    logger.info(f"Scan complete: {len(baskets)} baskets, {len(profitable_baskets)} profitable")
+
     return CombinatorialScanResult(
         timestamp=timestamp,
         events_scanned=len(events),
@@ -493,13 +498,13 @@ def format_scan_report(result: CombinatorialScanResult, detailed: bool = False) 
     lines.append(f"Baskets constructed: {result.baskets_constructed}")
     lines.append(f"Profitable opportunities: {result.opportunities_found}")
     lines.append("")
-    
+
     # Parameters
     lines.append("--- Parameters ---")
     for key, value in result.parameters.items():
         lines.append(f"  {key}: {value}")
     lines.append("")
-    
+
     # All baskets summary
     lines.append("--- All Baskets ---")
     for basket in result.baskets:
@@ -511,13 +516,13 @@ def format_scan_report(result: CombinatorialScanResult, detailed: bool = False) 
             f"edge={basket.net_edge_percent:+.2f}% | "
             f"{status}"
         )
-    
+
     if result.profitable_baskets:
         lines.append("")
         lines.append("=" * 80)
         lines.append("PROFITABLE OPPORTUNITIES")
         lines.append("=" * 80)
-        
+
         for i, basket in enumerate(result.profitable_baskets, 1):
             lines.append(f"\n{i}. {basket.event_title}")
             lines.append(f"   Type: {basket.relationship_type}")
@@ -528,7 +533,7 @@ def format_scan_report(result: CombinatorialScanResult, detailed: bool = False) 
             lines.append(f"   Net profit: ${basket.net_profit:.4f}")
             lines.append(f"   Net edge: {basket.net_edge_percent:+.2f}%")
             lines.append(f"   Min liquidity: ${basket.min_liquidity:.2f}")
-            
+
             if detailed:
                 lines.append("   Outcomes:")
                 for outcome in basket.outcomes:
@@ -537,10 +542,10 @@ def format_scan_report(result: CombinatorialScanResult, detailed: bool = False) 
                         f"ask={outcome.best_ask_yes:.4f} "
                         f"liq=${outcome.liquidity:.0f}"
                     )
-    
+
     lines.append("")
     lines.append("=" * 80)
-    
+
     return "\n".join(lines)
 
 
@@ -553,7 +558,7 @@ def run_combinatorial_scan(
     detailed: bool = False,
 ) -> dict[str, Any]:
     """Convenience function to run scan and return results.
-    
+
     Args:
         event_limit: Maximum events to fetch
         fee_rate: Settlement fee rate
@@ -561,7 +566,7 @@ def run_combinatorial_scan(
         max_basket_size: Maximum outcomes per basket
         min_liquidity: Minimum liquidity per outcome
         detailed: Include detailed output in report
-        
+
     Returns:
         Dictionary with full results and formatted report
     """
@@ -572,7 +577,7 @@ def run_combinatorial_scan(
         max_basket_size=max_basket_size,
         min_liquidity=min_liquidity,
     )
-    
+
     return {
         "result": result.to_dict(),
         "report": format_scan_report(result, detailed=detailed),

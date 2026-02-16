@@ -120,9 +120,7 @@ class TestPnlHealthCheck:
         today = now.strftime("%Y-%m-%d")
         (pnl_dir / f"pnl_{today}.json").write_text("{}")
 
-        result = pnl_health_check(
-            data_dir, max_fills_age_seconds=86400, max_pnl_age_seconds=86400
-        )
+        result = pnl_health_check(data_dir, max_fills_age_seconds=86400, max_pnl_age_seconds=86400)
 
         assert result["healthy"] is True
         assert result["fills"]["healthy"] is True

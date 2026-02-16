@@ -26,7 +26,7 @@ class TestBasketOutcome:
             liquidity=1000.0,
             outcome_index=0,
         )
-        
+
         d = outcome.to_dict()
         assert d["market_id"] == "123"
         assert d["best_ask_yes"] == 0.35
@@ -124,7 +124,7 @@ class TestDutchBookBasket:
                 outcome_index=2,
             ),
         ]
-        
+
         return DutchBookBasket(
             basket_id="test_456",
             event_id="event456",
@@ -204,7 +204,7 @@ class TestCombinatorialScanResult:
             profitable_baskets=[],
             parameters={"fee_rate": 0.0315},
         )
-        
+
         d = result.to_dict()
         assert d["events_scanned"] == 100
         assert d["baskets_constructed"] == 10
@@ -227,7 +227,7 @@ class TestFormatScanReport:
             profitable_baskets=[],
             parameters={},
         )
-        
+
         report = format_scan_report(result)
         assert "COMBINATORIAL ARBITRAGE SCAN REPORT" in report
         assert "Events scanned: 100" in report
@@ -235,7 +235,7 @@ class TestFormatScanReport:
     def test_format_with_profitable_baskets(self):
         """Test report includes profitable baskets."""
         timestamp = datetime.now(UTC)
-        
+
         outcome = BasketOutcome(
             market_id="1",
             market_slug="test",
@@ -246,7 +246,7 @@ class TestFormatScanReport:
             liquidity=500.0,
             outcome_index=0,
         )
-        
+
         basket = DutchBookBasket(
             basket_id="test",
             event_id="event1",
@@ -258,7 +258,7 @@ class TestFormatScanReport:
             min_edge_after_fees=0.015,
             timestamp=timestamp,
         )
-        
+
         result = CombinatorialScanResult(
             timestamp=timestamp,
             events_scanned=100,
@@ -268,7 +268,7 @@ class TestFormatScanReport:
             profitable_baskets=[basket],
             parameters={},
         )
-        
+
         report = format_scan_report(result)
         assert "PROFITABLE OPPORTUNITIES" in report
         assert "Test Event" in report
@@ -276,7 +276,7 @@ class TestFormatScanReport:
     def test_format_with_detailed_output(self):
         """Test detailed report includes outcome details."""
         timestamp = datetime.now(UTC)
-        
+
         outcome = BasketOutcome(
             market_id="1",
             market_slug="test",
@@ -287,7 +287,7 @@ class TestFormatScanReport:
             liquidity=500.0,
             outcome_index=0,
         )
-        
+
         basket = DutchBookBasket(
             basket_id="test",
             event_id="event1",
@@ -299,7 +299,7 @@ class TestFormatScanReport:
             min_edge_after_fees=0.015,
             timestamp=timestamp,
         )
-        
+
         result = CombinatorialScanResult(
             timestamp=timestamp,
             events_scanned=100,
@@ -309,7 +309,7 @@ class TestFormatScanReport:
             profitable_baskets=[basket],
             parameters={},
         )
-        
+
         report = format_scan_report(result, detailed=True)
         assert "Outcomes:" in report
         assert "Will candidate win?" in report
@@ -321,9 +321,9 @@ class TestManualBasketDefinitions:
     def test_definitions_exist(self):
         """Test that manual basket definitions exist."""
         from polymarket.combinatorial import MANUAL_BASKET_DEFINITIONS
-        
+
         assert len(MANUAL_BASKET_DEFINITIONS) > 0
-        
+
         # Check required fields
         for definition in MANUAL_BASKET_DEFINITIONS:
             assert "event_slug_starts_with" in definition
@@ -334,14 +334,14 @@ class TestManualBasketDefinitions:
     def test_definitions_have_valid_relationship_types(self):
         """Test that relationship types are valid."""
         from polymarket.combinatorial import MANUAL_BASKET_DEFINITIONS
-        
+
         valid_types = {
             "winner_take_all",
             "nomination_winner",
             "election_winner",
             "primary_winner",
         }
-        
+
         for definition in MANUAL_BASKET_DEFINITIONS:
             assert definition["relationship_type"] in valid_types
 
@@ -352,7 +352,7 @@ class TestEdgeCases:
     def test_empty_basket_properties(self):
         """Test basket with no outcomes."""
         timestamp = datetime.now(UTC)
-        
+
         basket = DutchBookBasket(
             basket_id="empty",
             event_id="event1",
@@ -364,7 +364,7 @@ class TestEdgeCases:
             min_edge_after_fees=0.015,
             timestamp=timestamp,
         )
-        
+
         assert basket.outcome_count == 0
         assert basket.min_liquidity == 0.0
         assert basket.gross_profit == 1.0  # 1.0 - 0.0
@@ -374,7 +374,7 @@ class TestEdgeCases:
     def test_single_outcome_basket(self):
         """Test basket with single outcome."""
         timestamp = datetime.now(UTC)
-        
+
         outcome = BasketOutcome(
             market_id="1",
             market_slug="test",
@@ -385,7 +385,7 @@ class TestEdgeCases:
             liquidity=500.0,
             outcome_index=0,
         )
-        
+
         basket = DutchBookBasket(
             basket_id="single",
             event_id="event1",
@@ -397,7 +397,7 @@ class TestEdgeCases:
             min_edge_after_fees=0.015,
             timestamp=timestamp,
         )
-        
+
         assert basket.outcome_count == 1
         assert abs(basket.gross_profit - 0.10) < 0.0001  # 1.0 - 0.90
         assert basket.is_profitable is True  # 0.10 - 0.0315 = 0.0685 > 0.015

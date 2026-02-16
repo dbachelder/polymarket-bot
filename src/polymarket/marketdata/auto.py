@@ -206,13 +206,9 @@ class AutoProvider(MarketDataProvider):
             try:
                 provider = self._get_provider(name)
                 healthy = provider.health_check()
-                results.append(
-                    ProviderHealth(name=name, healthy=healthy, error=None)
-                )
+                results.append(ProviderHealth(name=name, healthy=healthy, error=None))
             except Exception as e:
-                results.append(
-                    ProviderHealth(name=name, healthy=False, error=str(e))
-                )
+                results.append(ProviderHealth(name=name, healthy=False, error=str(e)))
         return results
 
     def close(self) -> None:

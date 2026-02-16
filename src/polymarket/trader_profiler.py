@@ -345,10 +345,14 @@ class TraderProfiler:
             profile = TraderProfile(
                 address=address,
                 username=existing.username or profile.username,
-                pnl_lifetime=profile.pnl_lifetime if profile.pnl_lifetime != Decimal("0") else existing.pnl_lifetime,
+                pnl_lifetime=profile.pnl_lifetime
+                if profile.pnl_lifetime != Decimal("0")
+                else existing.pnl_lifetime,
                 pnl_30d=profile.pnl_30d if profile.pnl_30d != Decimal("0") else existing.pnl_30d,
                 pnl_7d=profile.pnl_7d if profile.pnl_7d != Decimal("0") else existing.pnl_7d,
-                volume_lifetime=profile.volume_lifetime if profile.volume_lifetime != Decimal("0") else existing.volume_lifetime,
+                volume_lifetime=profile.volume_lifetime
+                if profile.volume_lifetime != Decimal("0")
+                else existing.volume_lifetime,
                 markets_traded=max(profile.markets_traded, existing.markets_traded),
                 rank=existing.rank or profile.rank,
                 source=existing.source if existing.source != "unknown" else profile.source,

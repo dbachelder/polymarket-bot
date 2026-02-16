@@ -7,6 +7,9 @@ Commands:
 - trader nav: Show NAV for a specific trader
 - copy sync: Sync and copy trades from top traders
 - copy status: Show copy trading performance
+- copytrade profile: Profile a trader from fills (realized PnL, win rate, hold time)
+- copytrade rank: Rank multiple traders from fills
+- copytrade top: Show top traders by ranking score
 - leaderboard build: Build leaderboard from fills
 - leaderboard show: Show leaderboard
 - leaderboard candidates: Select copy trading candidates
@@ -63,7 +66,7 @@ def cmd_trader_discover(args: argparse.Namespace) -> None:
                 if trader:
                     addr_short = score.address[:40] + "..."
                     pnl = f"${float(trader.pnl_30d):,.0f}"
-                    vol = f"${float(trader.volume_lifetime)/1e6:.1f}M"
+                    vol = f"${float(trader.volume_lifetime) / 1e6:.1f}M"
                     print(f"{i:<6}{addr_short:<44}{score.total_score:<10.1f}{pnl:<12}{vol:<15}")
 
         print("=" * 70)
@@ -84,7 +87,10 @@ def cmd_trader_list(args: argparse.Namespace) -> None:
 
     # Sort by score if available
     score_map = {s.address: s for s in scores}
-    traders.sort(key=lambda t: score_map.get(t.address.lower(), TraderScore(t.address, 0)).total_score, reverse=True)
+    traders.sort(
+        key=lambda t: score_map.get(t.address.lower(), TraderScore(t.address, 0)).total_score,
+        reverse=True,
+    )
 
     if args.format == "json":
         output = {
@@ -96,16 +102,20 @@ def cmd_trader_list(args: argparse.Namespace) -> None:
         print("=" * 90)
         print("TRACKED TRADERS")
         print("=" * 90)
-        print(f"{'Address':<44}{'Score':<10}{'30d PnL':<12}{'7d PnL':<12}{'Markets':<10}{'Source':<10}")
+        print(
+            f"{'Address':<44}{'Score':<10}{'30d PnL':<12}{'7d PnL':<12}{'Markets':<10}{'Source':<10}"
+        )
         print("-" * 90)
 
-        for trader in traders[:args.limit]:
+        for trader in traders[: args.limit]:
             score = score_map.get(trader.address.lower())
             score_str = f"{score.total_score:.1f}" if score else "N/A"
             pnl_30d = f"${float(trader.pnl_30d):,.0f}" if trader.pnl_30d else "$0"
             pnl_7d = f"${float(trader.pnl_7d):,.0f}" if trader.pnl_7d else "$0"
             addr_short = trader.address[:40] + "..."
-            print(f"{addr_short:<44}{score_str:<10}{pnl_30d:<12}{pnl_7d:<12}{trader.markets_traded:<10}{trader.source:<10}")
+            print(
+                f"{addr_short:<44}{score_str:<10}{pnl_30d:<12}{pnl_7d:<12}{trader.markets_traded:<10}{trader.source:<10}"
+            )
 
         print("=" * 90)
         print(f"Showing {min(len(traders), args.limit)} of {len(traders)} traders")
@@ -132,7 +142,9 @@ def cmd_trader_sync(args: argparse.Namespace) -> None:
     if args.format == "json":
         output = {
             "synced": len(results),
-            "results": {addr: {"new": new, "total": total} for addr, (new, total) in results.items()},
+            "results": {
+                addr: {"new": new, "total": total} for addr, (new, total) in results.items()
+            },
         }
         print(json.dumps(output, indent=2))
     else:
@@ -165,7 +177,7 @@ def cmd_trader_nav(args: argparse.Namespace) -> None:
             "address": args.address,
             "current_nav": nav.to_dict(),
             "summary": summary,
-            "history": [h.to_dict() for h in history[-args.history:]],
+            "history": [h.to_dict() for h in history[-args.history :]],
         }
         print(json.dumps(output, indent=2))
     else:
@@ -187,13 +199,15 @@ def cmd_trader_nav(args: argparse.Namespace) -> None:
         print(f"Total Fills:        {summary['total_fills']}")
         print(f"Total Positions:    {summary['total_positions']}")
         print(f"Open Positions:     {summary['open_positions']}")
-        print(f"Total Return:       ${summary['total_return']:,.2f} ({summary['total_return_pct']:.2f}%)")
+        print(
+            f"Total Return:       ${summary['total_return']:,.2f} ({summary['total_return_pct']:.2f}%)"
+        )
         print(f"Max Drawdown:       ${summary['max_drawdown']:,.2f}")
 
         if history and args.history > 0:
             print()
             print(f"--- NAV History (last {min(len(history), args.history)} points) ---")
-            for snap in history[-args.history:]:
+            for snap in history[-args.history :]:
                 ts = snap.timestamp[:19]  # Trim to seconds
                 print(f"  {ts} | NAV: ${float(snap.nav):>12,.2f} | Pos: {snap.open_position_count}")
 
@@ -239,10 +253,7 @@ def cmd_copy_sync(args: argparse.Namespace) -> None:
     if args.format == "json":
         output = {
             "copied_trades": len(all_copies),
-            "top_traders": [
-                {"address": p.address, "score": s.total_score}
-                for p, s in top_traders
-            ],
+            "top_traders": [{"address": p.address, "score": s.total_score} for p, s in top_traders],
             "current_equity": equity.to_dict(),
         }
         print(json.dumps(output, indent=2))
@@ -268,7 +279,7 @@ def cmd_copy_status(args: argparse.Namespace) -> None:
     if args.format == "json":
         output = {
             "summary": summary,
-            "equity_curve": [e.to_dict() for e in equity_curve[-args.history:]],
+            "equity_curve": [e.to_dict() for e in equity_curve[-args.history :]],
         }
         print(json.dumps(output, indent=2))
     else:
@@ -280,7 +291,9 @@ def cmd_copy_status(args: argparse.Namespace) -> None:
         print(f"Starting Cash:      ${summary['starting_cash']:>12,.2f}")
         print(f"Current Cash:       ${summary['current_cash']:>12,.2f}")
         print(f"Current Equity:     ${summary['current_equity']:>12,.2f}")
-        print(f"Total Return:       ${summary['total_return']:>12,.2f} ({summary['total_return_pct']:.2f}%)")
+        print(
+            f"Total Return:       ${summary['total_return']:>12,.2f} ({summary['total_return_pct']:.2f}%)"
+        )
         print(f"Max Drawdown:       ${summary['max_drawdown']:>12,.2f}")
         print()
         print("--- PnL Breakdown ---")
@@ -297,9 +310,11 @@ def cmd_copy_status(args: argparse.Namespace) -> None:
         if equity_curve and args.history > 0:
             print()
             print(f"--- Equity Curve (last {min(len(equity_curve), args.history)} points) ---")
-            for snap in equity_curve[-args.history:]:
+            for snap in equity_curve[-args.history :]:
                 ts = snap.timestamp[:19]
-                print(f"  {ts} | Equity: ${float(snap.net_equity):>12,.2f} | Pos: {snap.open_position_count}")
+                print(
+                    f"  {ts} | Equity: ${float(snap.net_equity):>12,.2f} | Pos: {snap.open_position_count}"
+                )
 
         print("=" * 70)
 
@@ -377,11 +392,11 @@ def cmd_leaderboard_build(args: argparse.Namespace) -> None:
             print(f"{'Rank':<6}{'Address':<44}{'PnL':<12}{'Volume':<15}{'Win%':<8}{'Trades':<8}")
             print("-" * 90)
 
-            for entry in leaderboard.entries[:args.limit]:
+            for entry in leaderboard.entries[: args.limit]:
                 stats = entry.stats
                 addr_short = stats.address[:40] + "..."
                 pnl = f"${float(stats.realized_pnl):,.0f}"
-                vol = f"${float(stats.total_volume)/1e6:.1f}M"
+                vol = f"${float(stats.total_volume) / 1e6:.1f}M"
                 win_pct = f"{stats.win_rate:.0f}%"
                 trades = str(stats.total_trades)
                 print(f"{entry.rank:<6}{addr_short:<44}{pnl:<12}{vol:<15}{win_pct:<8}{trades:<8}")
@@ -418,12 +433,12 @@ def cmd_leaderboard_show(args: argparse.Namespace) -> None:
         print(f"{'Rank':<6}{'Address':<44}{'Score':<10}{'PnL':<12}{'Volume':<15}{'Win%':<8}")
         print("-" * 90)
 
-        for entry in leaderboard.entries[:args.limit]:
+        for entry in leaderboard.entries[: args.limit]:
             stats = entry.stats
             addr_short = stats.address[:40] + "..."
             score = f"{entry.composite_score:.2f}"
             pnl = f"${float(stats.realized_pnl):,.0f}"
-            vol = f"${float(stats.total_volume)/1e6:.1f}M"
+            vol = f"${float(stats.total_volume) / 1e6:.1f}M"
             win_pct = f"{stats.win_rate:.0f}%"
             print(f"{entry.rank:<6}{addr_short:<44}{score:<10}{pnl:<12}{vol:<15}{win_pct:<8}")
 
@@ -437,13 +452,17 @@ def cmd_leaderboard_show(args: argparse.Namespace) -> None:
         print("--- Top by Volume ---")
         for entry in leaderboard.get_top_by_volume(args.top_n):
             stats = entry.stats
-            print(f"  #{entry.volume_rank} {stats.address[:40]}... ${float(stats.total_volume)/1e6:.1f}M")
+            print(
+                f"  #{entry.volume_rank} {stats.address[:40]}... ${float(stats.total_volume) / 1e6:.1f}M"
+            )
 
         print()
         print("--- Top by Win Rate ---")
         for entry in leaderboard.get_top_by_win_rate(args.top_n, min_trades=10):
             stats = entry.stats
-            print(f"  #{entry.win_rate_rank} {stats.address[:40]}... {stats.win_rate:.1f}% ({stats.win_count}/{stats.total_trades})")
+            print(
+                f"  #{entry.win_rate_rank} {stats.address[:40]}... {stats.win_rate:.1f}% ({stats.win_count}/{stats.total_trades})"
+            )
 
         print("=" * 90)
 
@@ -488,14 +507,207 @@ def cmd_leaderboard_candidates(args: argparse.Namespace) -> None:
             print(f"#{i} {stats.address}")
             print(f"  Realized PnL:     ${float(stats.realized_pnl):,.2f}")
             print(f"  Net PnL (after fees): ${float(stats.net_pnl):,.2f}")
-            print(f"  Volume:           ${float(stats.total_volume)/1e6:.2f}M")
-            print(f"  Win Rate:         {stats.win_rate:.1f}% ({stats.win_count}W/{stats.loss_count}L)")
+            print(f"  Volume:           ${float(stats.total_volume) / 1e6:.2f}M")
+            print(
+                f"  Win Rate:         {stats.win_rate:.1f}% ({stats.win_count}W/{stats.loss_count}L)"
+            )
             print(f"  Trades:           {stats.total_trades}")
             print(f"  Avg Trade PnL:    ${float(stats.avg_trade_pnl):,.2f}")
             print(f"  Markets:          {stats.markets_traded}")
             print(f"  Recommended Size: ${float(candidate.recommended_position_size):,.2f}")
             print(f"  Selection Score:  {candidate.selection_score:.3f}")
             print(f"  Rationale:        {', '.join(candidate.selection_reason)}")
+            print()
+
+        print("=" * 90)
+
+
+def cmd_copytrade_profile(args: argparse.Namespace) -> None:
+    """Profile a trader from fills (realized PnL, win rate, hold time)."""
+    from polymarket.copytrade_profiler import CopytradeProfiler
+
+    profiler = CopytradeProfiler(data_dir=args.data_dir)
+    metrics = profiler.compute_metrics(args.address)
+
+    if args.save:
+        profiler.save_metrics(args.address, metrics)
+
+    if args.format == "json":
+        print(json.dumps(metrics.to_dict(), indent=2))
+    else:
+        print("=" * 70)
+        print(f"TRADER PROFILE (from fills): {args.address[:40]}...")
+        print("=" * 70)
+        print()
+        print("--- Performance ---")
+        print(f"Realized PnL:       ${float(metrics.realized_pnl):>12,.2f}")
+        print(f"Total Fees:         ${float(metrics.total_fees):>12,.2f}")
+        print(f"Gross PnL:          ${float(metrics.gross_pnl):>12,.2f}")
+        print(f"Avg Trade PnL:      ${float(metrics.avg_trade_pnl):>12,.2f}")
+        print(f"Win Rate:           {metrics.win_rate:>12.1f}%")
+        print(f"  Wins:             {metrics.winning_trades}")
+        print(f"  Losses:           {metrics.losing_trades}")
+        print(f"Total Trades:       {metrics.total_trades}")
+        print()
+        print("--- Hold Times ---")
+        print(f"Average:            {metrics.avg_hold_time_hours:>11.1f} hours")
+        print(f"Median:             {metrics.median_hold_time_hours:>11.1f} hours")
+        print(
+            f"Range:              {metrics.min_hold_time_hours:.1f} - {metrics.max_hold_time_hours:.1f} hours"
+        )
+        print()
+        print("--- Risk Metrics ---")
+        print(f"Best Trade:         ${float(metrics.best_trade):>12,.2f}")
+        print(f"Worst Trade:        ${float(metrics.worst_trade):>12,.2f}")
+        print(f"PnL Volatility:     {metrics.pnl_volatility:>12.2f}")
+        print(f"Sharpe-like Ratio:  {metrics.sharpe_like_ratio:>12.2f}")
+        print(f"Max Consec Wins:    {metrics.max_consecutive_wins}")
+        print(f"Max Consec Losses:  {metrics.max_consecutive_losses}")
+        print()
+        print("--- Activity ---")
+        print(f"Total Volume:       ${float(metrics.total_volume):>12,.2f}")
+        print(f"Unique Markets:     {metrics.unique_markets}")
+        print(f"Trading Days:       {metrics.trading_days}")
+        if metrics.first_trade_at:
+            print(f"First Trade:        {metrics.first_trade_at[:19]}")
+        if metrics.last_trade_at:
+            print(f"Last Trade:         {metrics.last_trade_at[:19]}")
+        print("=" * 70)
+
+
+def cmd_copytrade_rank(args: argparse.Namespace) -> None:
+    """Rank multiple traders from fills."""
+    from polymarket.copytrade_profiler import CopytradeProfiler
+
+    profiler = CopytradeProfiler(data_dir=args.data_dir)
+
+    # Get addresses to rank
+    addresses = args.address
+
+    if args.from_leaderboard:
+        # Load from existing leaderboard
+        from polymarket.trader_leaderboard import TraderLeaderboardBuilder
+
+        builder = TraderLeaderboardBuilder(data_dir=args.leaderboard_dir)
+        leaderboard = builder.load_leaderboard()
+        if leaderboard:
+            addresses = [e.stats.address for e in leaderboard.entries]
+
+    if not addresses:
+        print("No addresses provided. Use --address or --from-leaderboard")
+        return
+
+    rankings = profiler.rank_traders(
+        addresses,
+        min_trades=args.min_trades,
+        min_win_rate=args.min_win_rate,
+    )
+
+    if args.output:
+        export_path = profiler.export_rankings(addresses, args.output)
+        print(f"Rankings exported to: {export_path}")
+
+    if args.format == "json":
+        output = {
+            "ranked_count": len(rankings),
+            "min_trades": args.min_trades,
+            "min_win_rate": args.min_win_rate,
+            "rankings": [r.to_dict() for r in rankings],
+        }
+        print(json.dumps(output, indent=2))
+    else:
+        print("=" * 90)
+        print("COPYTRADE RANKINGS (from fills)")
+        print("=" * 90)
+        print(f"Traders analyzed: {len(addresses)}")
+        print(f"Ranked (passed filters): {len(rankings)}")
+        print(f"Filters: min_trades={args.min_trades}, min_win_rate={args.min_win_rate}%")
+        print()
+
+        if rankings:
+            print(f"{'Rank':<6}{'Address':<44}{'Score':<10}{'Win%':<8}{'Trades':<8}{'PnL':<12}")
+            print("-" * 90)
+
+            for r in rankings[: args.limit]:
+                addr_short = r.address[:40] + "..."
+                score = f"{r.overall_score:.1f}"
+                win_rate = f"{r.win_rate:.0f}%"
+                trades = str(r.total_trades)
+                pnl = f"${float(r.realized_pnl):,.0f}"
+                print(f"{r.rank:<6}{addr_short:<44}{score:<10}{win_rate:<8}{trades:<8}{pnl:<12}")
+
+            if len(rankings) > args.limit:
+                print(f"\n... and {len(rankings) - args.limit} more traders")
+
+            # Show score breakdown
+            print()
+            print("--- Component Scores (top 5) ---")
+            for r in rankings[:5]:
+                print(f"#{r.rank} {r.address[:40]}...")
+                print(
+                    f"  Overall: {r.overall_score:.1f} | PnL: {r.pnl_score:.1f} | Win: {r.win_rate_score:.1f} | Consist: {r.consistency_score:.1f} | Exp: {r.experience_score:.1f}"
+                )
+
+        print("=" * 90)
+
+
+def cmd_copytrade_top(args: argparse.Namespace) -> None:
+    """Show top traders by ranking score."""
+    from polymarket.copytrade_profiler import CopytradeProfiler
+    from polymarket.trader_leaderboard import TraderLeaderboardBuilder
+
+    profiler = CopytradeProfiler(data_dir=args.data_dir)
+    builder = TraderLeaderboardBuilder(data_dir=args.leaderboard_dir)
+
+    leaderboard = builder.load_leaderboard()
+    if not leaderboard:
+        print("No leaderboard found. Run 'trader leaderboard build' first.")
+        return
+
+    addresses = [e.stats.address for e in leaderboard.entries]
+
+    top_traders = profiler.get_top_traders(
+        addresses,
+        k=args.k,
+        min_trades=args.min_trades,
+        min_score=args.min_score,
+    )
+
+    if args.format == "json":
+        output = {
+            "top_k": args.k,
+            "selected": len(top_traders),
+            "traders": [r.to_dict() for r in top_traders],
+        }
+        print(json.dumps(output, indent=2))
+    else:
+        print("=" * 90)
+        print("TOP TRADERS FOR COPY TRADING")
+        print("=" * 90)
+        print(f"Selected: {len(top_traders)} traders")
+        print()
+
+        for i, ranking in enumerate(top_traders, 1):
+            summary = profiler.get_trader_summary(ranking.address)
+            perf = summary["performance"]
+            hold = summary["hold_times"]
+            risk = summary["risk"]
+            activity = summary["activity"]
+
+            print(f"#{i} {ranking.address}")
+            print(f"  Overall Score:    {ranking.overall_score:.1f}")
+            print(
+                f"  Component Scores: PnL={ranking.pnl_score:.1f} Win={ranking.win_rate_score:.1f} Consist={ranking.consistency_score:.1f} Exp={ranking.experience_score:.1f}"
+            )
+            print(f"  Realized PnL:     ${perf['realized_pnl_usd']:,.2f}")
+            print(
+                f"  Win Rate:         {perf['win_rate_pct']:.1f}% ({perf['winning_trades']}W/{perf['losing_trades']}L)"
+            )
+            print(f"  Trades:           {perf['total_trades']}")
+            print(f"  Avg Hold Time:    {hold['avg_hours']:.1f} hours")
+            print(f"  Sharpe-like:      {risk['sharpe_like_ratio']:.2f}")
+            print(f"  Volume:           ${activity['total_volume_usd']:,.2f}")
+            print(f"  Markets:          {activity['unique_markets']}")
             print()
 
         print("=" * 90)
@@ -819,3 +1031,129 @@ def add_trader_commands(subparsers) -> None:
         help="Output format (default: human)",
     )
     lb_cand.set_defaults(func=cmd_leaderboard_candidates)
+
+    # Copytrade profiler command (v1: rank traders from fills)
+    ct = subparsers.add_parser("copytrade", help="Copytrade profiling from fills (v1)")
+    ct_sub = ct.add_subparsers(dest="copytrade_cmd", required=True)
+
+    # copytrade profile
+    ct_profile = ct_sub.add_parser(
+        "profile",
+        help="Profile a trader from fills (realized PnL, win rate, hold time)",
+    )
+    ct_profile.add_argument("address", help="Trader wallet address")
+    ct_profile.add_argument(
+        "--data-dir",
+        default="data/copytrade_profiles",
+        help="Data directory (default: data/copytrade_profiles)",
+    )
+    ct_profile.add_argument(
+        "--save",
+        action="store_true",
+        help="Save computed metrics to disk",
+    )
+    ct_profile.add_argument(
+        "--format",
+        choices=["json", "human"],
+        default="human",
+        help="Output format (default: human)",
+    )
+    ct_profile.set_defaults(func=cmd_copytrade_profile)
+
+    # copytrade rank
+    ct_rank = ct_sub.add_parser(
+        "rank",
+        help="Rank multiple traders from fills",
+    )
+    ct_rank.add_argument(
+        "--address",
+        action="append",
+        default=[],
+        help="Trader addresses to rank (can be used multiple times)",
+    )
+    ct_rank.add_argument(
+        "--from-leaderboard",
+        action="store_true",
+        help="Use addresses from existing leaderboard",
+    )
+    ct_rank.add_argument(
+        "--leaderboard-dir",
+        default="data/trader_leaderboard",
+        help="Leaderboard data directory (default: data/trader_leaderboard)",
+    )
+    ct_rank.add_argument(
+        "--min-trades",
+        type=int,
+        default=5,
+        help="Minimum trades required for ranking (default: 5)",
+    )
+    ct_rank.add_argument(
+        "--min-win-rate",
+        type=float,
+        default=0.0,
+        help="Minimum win rate percentage (default: 0)",
+    )
+    ct_rank.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Maximum traders to display (default: 20)",
+    )
+    ct_rank.add_argument(
+        "--output",
+        default=None,
+        help="Export rankings to file",
+    )
+    ct_rank.add_argument(
+        "--data-dir",
+        default="data/copytrade_profiles",
+        help="Data directory (default: data/copytrade_profiles)",
+    )
+    ct_rank.add_argument(
+        "--format",
+        choices=["json", "human"],
+        default="human",
+        help="Output format (default: human)",
+    )
+    ct_rank.set_defaults(func=cmd_copytrade_rank)
+
+    # copytrade top
+    ct_top = ct_sub.add_parser(
+        "top",
+        help="Show top traders by ranking score",
+    )
+    ct_top.add_argument(
+        "-k",
+        type=int,
+        default=10,
+        help="Number of top traders to show (default: 10)",
+    )
+    ct_top.add_argument(
+        "--min-trades",
+        type=int,
+        default=5,
+        help="Minimum trades required (default: 5)",
+    )
+    ct_top.add_argument(
+        "--min-score",
+        type=float,
+        default=0.0,
+        help="Minimum overall score required (default: 0)",
+    )
+    ct_top.add_argument(
+        "--leaderboard-dir",
+        default="data/trader_leaderboard",
+        help="Leaderboard data directory (default: data/trader_leaderboard)",
+    )
+    ct_top.add_argument(
+        "--data-dir",
+        default="data/copytrade_profiles",
+        help="Data directory (default: data/copytrade_profiles)",
+    )
+    ct_top.add_argument(
+        "--format",
+        choices=["json", "human"],
+        default="human",
+        help="Output format (default: human)",
+    )
+    ct_top.set_defaults(func=cmd_copytrade_top)

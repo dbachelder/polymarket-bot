@@ -626,7 +626,9 @@ class TraderLeaderboardBuilder:
             # Higher win rate + lower volatility (more trades) = larger position
             position_multiplier = min(stats.win_rate / 100, 1.0)
             trade_confidence = min(stats.total_trades / 100, 1.0)
-            recommended_size = Decimal("100") * Decimal(str(position_multiplier * trade_confidence + 0.5))
+            recommended_size = Decimal("100") * Decimal(
+                str(position_multiplier * trade_confidence + 0.5)
+            )
 
             candidate = CopyCandidate(
                 stats=stats,

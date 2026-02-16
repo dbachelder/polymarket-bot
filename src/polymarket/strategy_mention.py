@@ -211,21 +211,27 @@ class TrumpWordFrequencyAnalyzer:
         topic_clusters: Dict mapping topics to related words
     """
 
-    word_frequency: dict[str, float] = field(default_factory=lambda: TRUMP_SPEECH_WORD_FREQUENCY.copy())
-    context_modifiers: dict[str, float] = field(default_factory=lambda: SPEECH_CONTEXT_MODIFIERS.copy())
+    word_frequency: dict[str, float] = field(
+        default_factory=lambda: TRUMP_SPEECH_WORD_FREQUENCY.copy()
+    )
+    context_modifiers: dict[str, float] = field(
+        default_factory=lambda: SPEECH_CONTEXT_MODIFIERS.copy()
+    )
     topic_clusters: dict[str, list[str]] = field(default_factory=lambda: TOPIC_CLUSTERS.copy())
 
     # Estimated average words per speech by type
-    SPEECH_LENGTH_ESTIMATES: dict[str, int] = field(default_factory=lambda: {
-        "campaign_rally": 8000,
-        "state_union": 6000,
-        "press_conference": 3000,
-        "interview": 4000,
-        "debate": 3500,
-        "remarks": 2000,
-        "statement": 1000,
-        "speech": 5000,  # Default
-    })
+    SPEECH_LENGTH_ESTIMATES: dict[str, int] = field(
+        default_factory=lambda: {
+            "campaign_rally": 8000,
+            "state_union": 6000,
+            "press_conference": 3000,
+            "interview": 4000,
+            "debate": 3500,
+            "remarks": 2000,
+            "statement": 1000,
+            "speech": 5000,  # Default
+        }
+    )
 
     def get_base_rate(self, word: str) -> float:
         """Get base mention frequency per 1000 words for a keyword.
@@ -619,7 +625,9 @@ def _compute_theoretical_yes_probability(
             prob = estimate["adjusted_probability"]
             logger.debug(
                 "Trump word-frequency estimate for '%s' in %s context: %.3f",
-                target, speech_context, prob
+                target,
+                speech_context,
+                prob,
             )
             return prob
 

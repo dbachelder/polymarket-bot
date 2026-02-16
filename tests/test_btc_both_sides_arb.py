@@ -114,9 +114,7 @@ class TestCalculateConfidence:
 
     def test_confidence_aligned(self) -> None:
         """Test confidence with alignment bonus."""
-        confidence = calculate_confidence(
-            Decimal("0.48"), Decimal("0.46"), aligned_15m=True
-        )
+        confidence = calculate_confidence(Decimal("0.48"), Decimal("0.46"), aligned_15m=True)
         # Base 0.5 + sanity 0.1 + cheap 0.1 + aligned 0.15 = 0.85
         assert confidence == Decimal("0.85")
 

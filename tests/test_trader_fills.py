@@ -246,14 +246,16 @@ class TestTraderAccounting:
         acc = TraderAccounting(trader_address="0xabc")
 
         # Add a buy
-        acc.add_fill(TraderFill(
-            token_id="token123",
-            side="buy",
-            size=Decimal("100"),
-            price=Decimal("0.55"),
-            fee=Decimal("0.11"),
-            timestamp="2024-01-01T00:00:00+00:00",
-        ))
+        acc.add_fill(
+            TraderFill(
+                token_id="token123",
+                side="buy",
+                size=Decimal("100"),
+                price=Decimal("0.55"),
+                fee=Decimal("0.11"),
+                timestamp="2024-01-01T00:00:00+00:00",
+            )
+        )
 
         nav = acc.compute_nav(current_prices={"token123": Decimal("0.60")})
 
@@ -334,14 +336,17 @@ class TestTraderFillTracker:
         address = "0xabc"
 
         # Add a fill first
-        tracker.save_fill(address, TraderFill(
-            token_id="token123",
-            side="buy",
-            size=Decimal("100"),
-            price=Decimal("0.55"),
-            fee=Decimal("0.11"),
-            timestamp="2024-01-01T00:00:00+00:00",
-        ))
+        tracker.save_fill(
+            address,
+            TraderFill(
+                token_id="token123",
+                side="buy",
+                size=Decimal("100"),
+                price=Decimal("0.55"),
+                fee=Decimal("0.11"),
+                timestamp="2024-01-01T00:00:00+00:00",
+            ),
+        )
 
         # Record NAV
         _snapshot = tracker.record_nav_snapshot(address, {"token123": Decimal("0.60")})
@@ -357,14 +362,17 @@ class TestTraderFillTracker:
         tracker = TraderFillTracker(data_dir=tmp_path)
         address = "0xabc"
 
-        tracker.save_fill(address, TraderFill(
-            token_id="token123",
-            side="buy",
-            size=Decimal("100"),
-            price=Decimal("0.55"),
-            fee=Decimal("0.11"),
-            timestamp="2024-01-01T00:00:00+00:00",
-        ))
+        tracker.save_fill(
+            address,
+            TraderFill(
+                token_id="token123",
+                side="buy",
+                size=Decimal("100"),
+                price=Decimal("0.55"),
+                fee=Decimal("0.11"),
+                timestamp="2024-01-01T00:00:00+00:00",
+            ),
+        )
 
         summary = tracker.get_trader_summary(address)
 
