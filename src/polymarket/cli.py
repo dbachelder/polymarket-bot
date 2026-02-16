@@ -1133,6 +1133,91 @@ def cmd_news_momentum_positions(args: argparse.Namespace) -> None:
         print("\n" + "=" * 70)
 
 
+def cmd_no_bias_scan(args: argparse.Namespace) -> None:
+    """Scan for NO bias exploit opportunities in phrase-based markets."""
+    from pathlib import Path
+
+    from .strategy_no_bias import run_no_bias_scan
+
+    snapshots_dir = Path(args.snapshots_dir) if args.snapshots_dir else None
+
+    result = run_no_bias_scan(
+        snapshots_dir=snapshots_dir,
+        bankroll=args.bankroll,
+        dry_run=not args.live,
+        max_positions=args.max_positions,
+        min_mispricing_ratio=args.min_mispricing_ratio,
+        min_volume_usd=args.min_volume,
+        max_yes_price=args.max_yes_price,
+        min_edge=args.min_edge,
+    )
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        print("=" * 70)
+        print("NO BIAS EXPLOIT SCAN RESULTS")
+        print("=" * 70)
+        print(f"Scan time: {result['timestamp']}")
+        print(f"Markets analyzed: {result['markets_analyzed']}")
+        print(f"Signals generated: {result['signals_generated']}")
+        print(f"Positions taken: {result['positions_taken']}")
+        print(f"Capital deployed: ${result['total_capital_deployed']:,.2f}")
+        print(f"Dry run: {result['dry_run']}")
+
+        if result['signals']:
+            print("\n--- Top Signals ---")
+            for sig in result['signals'][:10]:
+                print(f"\n  {sig['market_question'][:50]}...")
+                print(f"    Vertical: {sig['vertical']}")
+                print(f"    YES ask: {sig['yes_ask']:.1%} | Base rate: {sig['base_rate']:.1%}")
+                print(f"    Mispricing: {sig['mispricing_ratio']:.1f}x | Edge: {sig['edge']:.1%}")
+                print(f"    Confidence: {sig['confidence']:.1%} | Volume: ${sig['volume_usd']:,.0f}")
+
+        print("\n" + "=" * 70)
+
+
+def cmd_no_bias_positions(args: argparse.Namespace) -> None:
+    """Show NO bias positions and performance."""
+    from pathlib import Path
+
+    from .strategy_no_bias import NoBiasTracker, get_no_bias_performance
+
+    data_dir = Path(args.data_dir) if args.data_dir else None
+    tracker = NoBiasTracker(data_dir=data_dir)
+    result = get_no_bias_performance(tracker)
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        print("=" * 70)
+        print("NO BIAS EXPLOIT POSITIONS")
+        print("=" * 70)
+
+        summary = result['summary']
+        print("\n--- Performance Summary ---")
+        print(f"Total trades:     {summary['total_trades']}")
+        print(f"Win rate:         {summary['win_rate']:.1%}")
+        print(f"Total PnL:        ${summary['total_pnl']:,.2f}")
+        print(f"Avg PnL/trade:    ${summary['avg_pnl']:,.2f}")
+
+        if summary.get('by_vertical'):
+            print("\n--- By Vertical ---")
+            for vertical, stats in summary['by_vertical'].items():
+                print(f"  {vertical}: {stats['trades']} trades, "
+                      f"{stats['win_rate']:.1%} WR, ${stats['total_pnl']:,.2f}")
+
+        if result['open_positions']:
+            print(f"\n--- Open Positions ({result['open_count']}) ---")
+            for p in result['open_positions']:
+                print(f"\n  {p['position_id']}")
+                print(f"    Market: {p['market'][:50]}...")
+                print(f"    Vertical: {p['vertical']} | Entry: {p['entry_price']:.3f}")
+                print(f"    Size: ${p['position_size']:,.2f} | Edge: {p['expected_edge']:.1%}")
+
+        print("\n" + "=" * 70)
+
+
 def cmd_watchdog(args: argparse.Namespace) -> None:
     """Run collector watchdog to ensure data freshness."""
     from pathlib import Path
@@ -2970,6 +3055,74 @@ def main() -> None:
     )
     nmp.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     nmp.set_defaults(func=cmd_news_momentum_positions)
+
+    # NO bias exploit commands
+    nb = sub.add_parser(
+        "no-bias-scan",
+        help="Scan for NO bias exploit opportunities in phrase-based markets",
+    )
+    nb.add_argument(
+        "--snapshots-dir",
+        type=str,
+        default=None,
+        help="Directory containing market snapshots",
+    )
+    nb.add_argument(
+        "--bankroll",
+        type=float,
+        default=10000,
+        help="Available capital in USD (default: 10000)",
+    )
+    nb.add_argument(
+        "--max-positions",
+        type=int,
+        default=10,
+        help="Maximum positions to take (default: 10)",
+    )
+    nb.add_argument(
+        "--live",
+        action="store_true",
+        help="Execute live trades (default: dry-run)",
+    )
+    nb.add_argument(
+        "--min-mispricing-ratio",
+        type=float,
+        default=3.0,
+        help="Minimum YES_price/base_rate ratio (default: 3.0)",
+    )
+    nb.add_argument(
+        "--min-volume",
+        type=float,
+        default=10000,
+        help="Minimum market volume USD (default: 10000)",
+    )
+    nb.add_argument(
+        "--max-yes-price",
+        type=float,
+        default=0.30,
+        help="Maximum YES price to consider (default: 0.30)",
+    )
+    nb.add_argument(
+        "--min-edge",
+        type=float,
+        default=0.05,
+        help="Minimum expected edge (default: 0.05 = 5%%)",
+    )
+    nb.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    nb.set_defaults(func=cmd_no_bias_scan)
+
+    nbp = sub.add_parser(
+        "no-bias-positions",
+        help="Show NO bias positions and performance",
+    )
+    nbp.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Data directory for position tracking",
+    )
+    nbp.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    nbp.set_defaults(func=cmd_no_bias_positions)
 
     # Add trader profiling commands
     from .trader_cli import add_trader_commands
