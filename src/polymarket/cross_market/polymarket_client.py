@@ -12,7 +12,7 @@ from typing import Any
 import httpx
 
 from ..clob import get_book
-from ..site import fetch_predictions_page, parse_next_data
+from ..site import fetch_predictions_page
 from . import POLYMARKET_FEE_SCHEDULE, FeeSchedule, VenueMarket
 
 logger = logging.getLogger(__name__)
@@ -84,10 +84,10 @@ class PolymarketClient:
         return markets
 
     def fetch_markets_by_page(self, page_slug: str = "politics") -> list[VenueMarket]:
-        """Fetch markets from a specific page (e.g., /predictions/politics).
+        """Fetch markets from a specific tag (e.g., politics, crypto, sports).
 
         Args:
-            page_slug: Page slug (politics, crypto, sports, etc.)
+            page_slug: Tag slug (politics, crypto, sports, etc.)
 
         Returns:
             List of VenueMarket objects
@@ -95,36 +95,18 @@ class PolymarketClient:
         markets: list[VenueMarket] = []
 
         try:
-            # Use site scraping approach for page-based discovery
-            html = fetch_predictions_page(page_slug)
-            data = parse_next_data(html)
+            # Use Gamma API for tag-based discovery
+            events = fetch_predictions_page(page_slug)
 
-            # Extract markets from dehydrated state
-            dehydrated = (
-                data.get("props", {})
-                .get("pageProps", {})
-                .get("dehydratedState", {})
-                .get("queries", [])
-            )
-
-            for q in dehydrated:
-                state = q.get("state", {})
-                inner_data = state.get("data")
-                if not isinstance(inner_data, dict):
-                    continue
-
-                pages = inner_data.get("pages", [])
-                for page in pages:
-                    results = page.get("results", [])
-                    for item in results:
-                        markets_data = item.get("markets", [])
-                        for m in markets_data:
-                            try:
-                                market = self._parse_market_from_page(m)
-                                if market:
-                                    markets.append(market)
-                            except Exception as e:
-                                logger.debug("Error parsing page market: %s", e)
+            for event_data in events:
+                markets_data = event_data.get("markets", [])
+                for m in markets_data:
+                    try:
+                        market = self._parse_market_from_page(m)
+                        if market:
+                            markets.append(market)
+                    except Exception as e:
+                        logger.debug("Error parsing page market: %s", e)
 
         except Exception as e:
             logger.exception("Error fetching page %s: %s", page_slug, e)

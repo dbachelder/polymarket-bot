@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from . import gamma
-from .site import fetch_predictions_page, parse_next_data
+from .site import fetch_predictions_page
 
 
 @dataclass(frozen=True)
@@ -68,42 +68,31 @@ def _extract_series_info(event_data: dict) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _parse_event_market_data(next_data: dict) -> list[tuple[dict, dict]]:
-    """Extract (event_data, market_data) tuples from next_data.
+def _parse_event_market_data(events_data: list[dict]) -> list[tuple[dict, dict]]:
+    """Extract (event_data, market_data) tuples from Gamma API events.
 
     Returns a list of tuples where each tuple contains:
     - event_data: The event/series metadata
     - market_data: The associated market (first market in the event)
     """
-    dehydrated = next_data["props"]["pageProps"]["dehydratedState"]["queries"]
-
-    pages: list[dict] = []
-    for q in dehydrated:
-        state = q.get("state", {})
-        data = state.get("data")
-        if not isinstance(data, dict):
-            continue
-        candidate_pages = data.get("pages")
-        if not isinstance(candidate_pages, list) or not candidate_pages:
-            continue
-        if candidate_pages[0].get("tagLabel") == "5M":
-            pages = candidate_pages
-            break
-
-    if not pages:
-        raise ValueError("Could not locate 5M pages payload in dehydratedState")
-
-    results: list[dict] = []
-    for p in pages:
-        results.extend(p.get("results") or [])
-
     event_market_pairs: list[tuple[dict, dict]] = []
-    for event_data in results:
+
+    for event_data in events_data:
         markets = event_data.get("markets") or []
         if not markets:
             continue
         market_data = markets[0]
-        token_ids = market_data.get("clobTokenIds")
+
+        # Parse clobTokenIds from JSON string
+        token_ids_str = market_data.get("clobTokenIds", "[]")
+        if isinstance(token_ids_str, str):
+            try:
+                token_ids = json.loads(token_ids_str)
+            except json.JSONDecodeError:
+                continue
+        else:
+            token_ids = token_ids_str
+
         if not token_ids or len(token_ids) != 2:
             continue
         event_market_pairs.append((event_data, market_data))
@@ -112,18 +101,29 @@ def _parse_event_market_data(next_data: dict) -> list[tuple[dict, dict]]:
 
 
 def build_universe_from_site() -> list[MarketUniverseEntry]:
-    """Build market universe by scraping /predictions/5M page.
+    """Build market universe by fetching from Gamma API.
 
     Returns a list of normalized MarketUniverseEntry objects.
     """
-    html = fetch_predictions_page("5M")
-    data = parse_next_data(html)
-    pairs = _parse_event_market_data(data)
+    events = fetch_predictions_page("5M")
+    pairs = _parse_event_market_data(events)
 
     entries: list[MarketUniverseEntry] = []
     for event_data, market_data in pairs:
         series_id, series_slug = _extract_series_info(event_data)
-        token_ids = market_data.get("clobTokenIds", [])
+
+        # Parse clobTokenIds from JSON string
+        token_ids_str = market_data.get("clobTokenIds", "[]")
+        if isinstance(token_ids_str, str):
+            try:
+                token_ids = json.loads(token_ids_str)
+            except json.JSONDecodeError:
+                continue
+        else:
+            token_ids = token_ids_str
+
+        if not token_ids or len(token_ids) != 2:
+            continue
 
         entry = MarketUniverseEntry(
             event_id=str(event_data.get("id")),

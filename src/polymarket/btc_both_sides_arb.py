@@ -602,20 +602,17 @@ class BothSidesArbitrageStrategy:
         from .site import (
             extract_crypto_interval_events,
             fetch_crypto_interval_page,
-            parse_next_data,
         )
 
         # Fetch markets for the specified interval
-        html = fetch_crypto_interval_page(interval.upper())
-        data = parse_next_data(html)
+        data = fetch_crypto_interval_page(interval.upper())
         markets = extract_crypto_interval_events(data, interval_slug=interval.upper())
 
         # Fetch 15m markets for alignment check if needed
         markets_15m = None
         if self.check_alignment and interval == "5m":
             try:
-                html_15m = fetch_crypto_interval_page("15M")
-                data_15m = parse_next_data(html_15m)
+                data_15m = fetch_crypto_interval_page("15M")
                 markets_15m = extract_crypto_interval_events(data_15m, interval_slug="15M")
             except Exception:
                 markets_15m = None

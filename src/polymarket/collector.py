@@ -11,15 +11,13 @@ from .site import (
     extract_crypto_interval_events,
     fetch_crypto_interval_page,
     fetch_predictions_page,
-    parse_next_data,
 )
 
 
 def collect_5m_snapshot(out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    html = fetch_predictions_page("5M")
-    data = parse_next_data(html)
+    data = fetch_predictions_page("5M")
     markets = extract_5m_markets(data)
 
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -51,8 +49,7 @@ def collect_5m_snapshot(out_dir: Path) -> Path:
 def collect_15m_snapshot(out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    html = fetch_crypto_interval_page("15M")
-    data = parse_next_data(html)
+    data = fetch_crypto_interval_page("15M")
     events = extract_crypto_interval_events(data, interval_slug="15M")
 
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")

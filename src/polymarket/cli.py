@@ -54,10 +54,9 @@ def _print(obj: object) -> None:
 
 
 def cmd_markets_5m(args: argparse.Namespace) -> None:
-    from .site import extract_5m_markets, fetch_predictions_page, parse_next_data
+    from .site import extract_5m_markets, fetch_predictions_page
 
-    html = fetch_predictions_page("5M")
-    data = parse_next_data(html)
+    data = fetch_predictions_page("5M")
     ms = extract_5m_markets(data)
     out = [m.__dict__ for m in ms[: args.limit]]
     _print({"count": len(out), "markets": out})
@@ -67,11 +66,9 @@ def cmd_markets_15m(args: argparse.Namespace) -> None:
     from .site import (
         extract_crypto_interval_events,
         fetch_crypto_interval_page,
-        parse_next_data,
     )
 
-    html = fetch_crypto_interval_page("15M")
-    data = parse_next_data(html)
+    data = fetch_crypto_interval_page("15M")
     ms = extract_crypto_interval_events(data, interval_slug="15M")
     out = [m.__dict__ for m in ms[: args.limit]]
     _print({"count": len(out), "markets": out})
