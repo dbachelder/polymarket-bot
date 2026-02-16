@@ -58,13 +58,15 @@ def fetch_account_fills(
     since: datetime | None = None,
     limit: int = 100,
     config=None,
+    max_pages: int = 10,
 ) -> list[Fill]:
     """Fetch fills from Polymarket CLOB API for authenticated account.
 
     Args:
         since: Only fetch fills after this timestamp
-        limit: Maximum fills to fetch
+        limit: Maximum fills to fetch per page
         config: Optional PolymarketConfig (loads from env if not provided)
+        max_pages: Maximum pages to fetch (safety limit)
 
     Returns:
         List of Fill objects from account history
@@ -82,45 +84,67 @@ def fetch_account_fills(
             headers = _auth_headers(config)
 
             # The CLOB API endpoint for fills/trades
-            # Note: This is a placeholder - actual endpoint may differ
             # Common patterns: /trades, /fills, /orders?status=FILLED
             params: dict[str, str | int] = {"limit": limit}
             if since:
                 params["after"] = since.isoformat()
 
-            # Try common endpoints
+            # Try common endpoints with pagination
             endpoints_to_try = ["/trades", "/fills", "/orders"]
 
             for endpoint in endpoints_to_try:
                 try:
-                    resp = client.get(endpoint, params=params, headers=headers)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        # Handle different response formats
-                        if isinstance(data, list):
-                            fill_list = data
-                        elif isinstance(data, dict):
-                            fill_list = data.get("trades", data.get("fills", data.get("data", [])))
+                    page_fills = []
+                    cursor = None
+                    pages = 0
+
+                    while pages < max_pages:
+                        page_params = dict(params)
+                        if cursor:
+                            page_params["cursor"] = cursor
+
+                        resp = client.get(endpoint, params=page_params, headers=headers)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            # Handle different response formats
+                            if isinstance(data, list):
+                                fill_list = data
+                                cursor = None  # No pagination for list responses
+                            elif isinstance(data, dict):
+                                fill_list = data.get("trades", data.get("fills", data.get("data", [])))
+                                cursor = data.get("next_cursor") or data.get("cursor")
+                            else:
+                                fill_list = []
+                                cursor = None
+
+                            for fill_data in fill_list:
+                                try:
+                                    fill = Fill.from_dict(fill_data)
+                                    page_fills.append(fill)
+                                except (ValueError, KeyError, TypeError) as e:
+                                    logger.warning("Failed to parse fill: %s", e)
+                                    continue
+
+                            pages += 1
+                            # Stop if we got fewer than limit results (no more pages)
+                            if len(fill_list) < limit:
+                                break
+                            # Stop if no cursor for pagination
+                            if not cursor:
+                                break
+                        elif resp.status_code == 404:
+                            break  # Try next endpoint
+                        elif resp.status_code == 401:
+                            logger.warning("Authentication failed for %s", endpoint)
+                            return []
                         else:
-                            fill_list = []
+                            logger.warning("Unexpected status %d from %s", resp.status_code, endpoint)
+                            break
 
-                        for fill_data in fill_list:
-                            try:
-                                fill = Fill.from_dict(fill_data)
-                                fills.append(fill)
-                            except (ValueError, KeyError, TypeError) as e:
-                                logger.warning("Failed to parse fill: %s", e)
-                                continue
-
-                        logger.info("Fetched %d fills from %s", len(fills), endpoint)
-                        break
-                    elif resp.status_code == 404:
-                        continue  # Try next endpoint
-                    elif resp.status_code == 401:
-                        logger.warning("Authentication failed for %s", endpoint)
-                        break
-                    else:
-                        logger.warning("Unexpected status %d from %s", resp.status_code, endpoint)
+                    if page_fills:
+                        fills.extend(page_fills)
+                        logger.info("Fetched %d fills from %s (%d pages)", len(page_fills), endpoint, pages)
+                        break  # Found working endpoint, stop trying others
 
                 except httpx.HTTPError as e:
                     logger.warning("HTTP error fetching from %s: %s", endpoint, e)
@@ -290,8 +314,9 @@ def collect_fills(
     if since is None:
         since = get_last_fill_timestamp(fills_path)
         if since:
-            # Overlap by 1 hour to catch any fills that might have been delayed
-            since = since - timedelta(hours=1)
+            # Overlap by 4 hours to catch any fills that might have been delayed
+            # and to handle pagination edge cases near window boundaries
+            since = since - timedelta(hours=4)
 
     results = {
         "fills_path": str(fills_path),

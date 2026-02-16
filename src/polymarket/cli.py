@@ -154,6 +154,7 @@ def cmd_btc_preclose_paper(args: argparse.Namespace) -> None:
         size=Decimal(str(args.size)),
         starting_cash=Decimal(str(args.starting_cash)),
         snapshots_dir=Path(args.snapshots_dir),
+        force_trigger=getattr(args, 'force_trigger', False),
     )
 
     if args.format == "json":
@@ -202,6 +203,7 @@ def cmd_btc_preclose_paper_loop(args: argparse.Namespace) -> None:
         loop_duration_minutes=int(args.loop_duration_minutes),
         interval_seconds=int(args.interval_seconds),
         snapshots_dir=Path(args.snapshots_dir),
+        backup_trigger_interval_seconds=int(getattr(args, 'backup_trigger_interval', 14400)),
     )
 
     if args.format == "json":
@@ -3206,8 +3208,9 @@ def main() -> None:
     )
     btcpc.add_argument("--data-dir", default="data/paper_trading", help="Paper trading data dir")
     btcpc.add_argument("--snapshots-dir", default="data", help="Directory with collector snapshots (default: data)")
-    btcpc.add_argument("--window-seconds", type=int, default=300, help="Time window before close (default: 300s)")
+    btcpc.add_argument("--window-seconds", type=int, default=1200, help="Time window before close (default: 1200s = 20 min)")
     btcpc.add_argument("--cheap-price", type=float, default=0.05, help="Cheap price threshold (default: 0.05)")
+    btcpc.add_argument("--force-trigger", action="store_true", help="Ignore price thresholds (time-based backup trigger)")
     btcpc.add_argument("--size", type=float, default=1.0)
     btcpc.add_argument("--starting-cash", type=float, default=0.0)
     btcpc.add_argument("--use-monitor-thresholds", action="store_true", help="Use auto-adjusted thresholds from fills monitor")
@@ -3221,8 +3224,9 @@ def main() -> None:
     )
     btcpl.add_argument("--data-dir", default="data/paper_trading", help="Paper trading data dir")
     btcpl.add_argument("--snapshots-dir", default="data", help="Directory with collector snapshots (default: data)")
-    btcpl.add_argument("--window-seconds", type=int, default=300, help="Time window before close (default: 300s)")
+    btcpl.add_argument("--window-seconds", type=int, default=1200, help="Time window before close (default: 1200s = 20 min)")
     btcpl.add_argument("--cheap-price", type=float, default=0.05, help="Cheap price threshold (default: 0.05)")
+    btcpl.add_argument("--backup-trigger-interval", type=int, default=14400, help="Time-based backup trigger interval (default: 14400s = 4h)")
     btcpl.add_argument("--size", type=float, default=1.0)
     btcpl.add_argument("--starting-cash", type=float, default=0.0)
     btcpl.add_argument("--loop-duration-minutes", type=int, default=10, help="How long to run (default: 10 min)")

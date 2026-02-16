@@ -25,9 +25,9 @@ DEFAULT_STATE_PATH = Path("data/paper_trading/fills_monitor_state.json")
 # Configurable thresholds
 STALE_HOURS = 6  # Consider fills stale after 6 hours
 MIN_CHEAP_PRICE = Decimal("0.01")  # Don't go below 1 cent
-MAX_CHEAP_PRICE = Decimal("0.25")  # Don't go above 25 cents (loosened to ensure daily paper fills)
+MAX_CHEAP_PRICE = Decimal("0.50")  # Don't go above 50 cents (widened to ensure daily paper fills)
 MIN_WINDOW_SECONDS = 60  # Minimum 1 minute window
-MAX_WINDOW_SECONDS = 600  # Maximum 10 minute window
+MAX_WINDOW_SECONDS = 3600  # Maximum 1 hour window (widened from 10 min to catch more close opportunities)
 ADJUSTMENT_FACTOR = Decimal("1.5")  # Multiply by this when adjusting
 
 

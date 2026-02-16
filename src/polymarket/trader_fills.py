@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -542,6 +542,8 @@ class TraderFillTracker:
         self,
         address: str,
         fetch_limit: int = 1000,
+        window_hours: float = 24.0,
+        overlap_minutes: float = 5.0,
     ) -> tuple[int, int]:
         """Sync fills for a trader from API to local storage.
 
@@ -554,14 +556,20 @@ class TraderFillTracker:
         """
         address = address.lower()
 
-        # Load existing fills to find the latest timestamp
+        # Load existing fills to build a resilient fetch window.
+        #
+        # IMPORTANT: relying purely on "since = latest_timestamp" can create long gaps if the
+        # API returns out-of-order data, has inclusive/exclusive edge behavior, or we miss a page.
+        # Instead, re-scan a sliding recent window and de-dupe locally.
         existing_fills = self.load_fills(address)
-        since = None
-        if existing_fills:
-            latest = max(existing_fills, key=lambda f: f.timestamp)
-            since = latest.timestamp
 
-        # Fetch new fills
+        now = datetime.now(UTC)
+        window_start = now - timedelta(hours=window_hours)
+        # Add a small overlap to avoid fencepost issues when timestamps are truncated/rounded.
+        window_start = window_start - timedelta(minutes=overlap_minutes)
+        since = window_start.isoformat()
+
+        # Fetch fills from the recent window
         new_fills = self.fetch_fills_from_api(address, since=since, limit=fetch_limit)
 
         # Filter out duplicates (by transaction_hash or timestamp+token_id+side)

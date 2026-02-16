@@ -95,11 +95,12 @@ def _extract_btc_markets(snapshots: list[dict]) -> list[dict]:
 def run_btc_preclose_paper(
     *,
     data_dir: Path,
-    window_seconds: int = 900,  # Widened from 600 to 900 (15 min window)
-    cheap_price: Decimal = Decimal("0.25"),  # Temporarily widened from 0.08 to 0.25 to force fills
+    window_seconds: int = 1200,  # Widened from 600 to 1200 (20 min window) to catch smaller moves
+    cheap_price: Decimal = Decimal("0.05"),  # Lowered from 0.08 to 0.05 for higher trigger sensitivity
     size: Decimal = Decimal("1"),
     starting_cash: Decimal = Decimal("0"),
     snapshots_dir: Path | None = None,
+    force_trigger: bool = False,  # Time-based backup trigger (ignore price thresholds)
 ) -> dict[str, Any]:
     """Paper-trade cheap-side trigger on BTC 5m markets near close.
 
@@ -120,9 +121,17 @@ def run_btc_preclose_paper(
         Dict with scan results including triggers and fills
     """
     now = datetime.now(UTC)
-    
+
     if snapshots_dir is None:
         snapshots_dir = data_dir
+
+    # Log trigger conditions for debugging
+    logger.debug(
+        "BTC preclose scan starting: window=%ds, cheap_price=%s, force_trigger=%s",
+        window_seconds,
+        cheap_price,
+        force_trigger,
+    )
 
     # Load recent snapshots
     snapshots = _load_snapshots(snapshots_dir, max_age_seconds=900)
@@ -139,22 +148,11 @@ def run_btc_preclose_paper(
             "triggers": [],
             "near_close_log": [],
             "error": "No recent snapshots found",
+            "force_trigger": force_trigger,
         }
 
     # Extract BTC markets
     markets = _extract_btc_markets(snapshots)
-    
-    # Detailed instrumentation: log scan parameters
-    logger.info(
-        "BTC preclose scan starting: snapshots_dir=%s, snapshots=%d, btc_markets=%d, "
-        "window=%ds, cheap_price=%s, size=%s",
-        snapshots_dir,
-        len(snapshots),
-        len(markets),
-        window_seconds,
-        cheap_price,
-        size,
-    )
     
     engine = PaperTradingEngine(data_dir=data_dir, starting_cash=starting_cash)
 
@@ -166,15 +164,33 @@ def run_btc_preclose_paper(
 
     for m in markets:
         scanned += 1
+        market_slug = m.get("slug", "unknown")
         try:
             end_dt = datetime.fromisoformat(str(m.get("end_date", "")).replace("Z", "+00:00"))
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipping market %s: invalid end_date (%s)", market_slug, e)
             continue
 
         ttc = (end_dt - now).total_seconds()
-        if ttc < 0 or ttc > float(window_seconds):
+
+        # Debug logging for window detection logic
+        if ttc < 0:
+            logger.debug(
+                "Market %s: already closed (ttc=%.1fs)",
+                market_slug, ttc
+            )
+            continue
+        if ttc > float(window_seconds):
+            logger.debug(
+                "Market %s: outside window (ttc=%.1fs > window=%ds)",
+                market_slug, ttc, window_seconds
+            )
             continue
 
+        logger.debug(
+            "Market %s: INSIDE close window (ttc=%.1fs <= window=%ds)",
+            market_slug, ttc, window_seconds
+        )
         near_close += 1
 
         token_ids = m.get("clob_token_ids", [])
@@ -192,41 +208,65 @@ def run_btc_preclose_paper(
         no_ask = _best_ask(no_book)
 
         # Log near-close detection with best asks for debugging
-        near_close_entry = {
+        near_close_log.append({
             "market_slug": m.get("slug", "unknown"),
             "question": m.get("question", ""),
             "time_to_close_seconds": round(ttc, 3),
             "yes_ask": str(yes_ask) if yes_ask else None,
             "no_ask": str(no_ask) if no_ask else None,
+            "cheap_threshold": str(cheap_price),
+            "force_trigger": force_trigger,
             "timestamp": now.isoformat(),
-        }
-        near_close_log.append(near_close_entry)
-        
-        # Detailed logging for why no fill occurred
-        min_ask = min(yes_ask or Decimal("1.0"), no_ask or Decimal("1.0"))
-        if min_ask > cheap_price:
-            logger.info(
-                "BTC preclose no-fill: %s ttc=%.0fs yes_ask=%s no_ask=%s (cheap_price=%s)",
-                m.get("slug", "unknown"),
-                ttc,
-                yes_ask,
-                no_ask,
-                cheap_price,
-            )
+        })
 
         token_id = None
         side_label = None
         px: Decimal | None = None
 
-        if yes_ask is not None and yes_ask <= cheap_price:
-            token_id = yes_id
-            side_label = "yes"
-            px = yes_ask
-        if no_ask is not None and no_ask <= cheap_price:
-            if px is None or no_ask < px:
+        # Check price thresholds (or force trigger for time-based backup)
+        if force_trigger:
+            # Time-based backup: take best available price regardless of threshold
+            if yes_ask is not None and no_ask is not None:
+                # Pick the cheaper side
+                if yes_ask <= no_ask:
+                    token_id = yes_id
+                    side_label = "yes"
+                    px = yes_ask
+                else:
+                    token_id = no_id
+                    side_label = "no"
+                    px = no_ask
+            elif yes_ask is not None:
+                token_id = yes_id
+                side_label = "yes"
+                px = yes_ask
+            elif no_ask is not None:
                 token_id = no_id
                 side_label = "no"
                 px = no_ask
+            logger.debug(
+                "FORCE TRIGGER for %s: selected %s @ %s (yes=%s, no=%s)",
+                market_slug, side_label, px, yes_ask, no_ask
+            )
+        else:
+            # Normal cheap-price trigger logic
+            if yes_ask is not None and yes_ask <= cheap_price:
+                token_id = yes_id
+                side_label = "yes"
+                px = yes_ask
+                logger.debug(
+                    "Cheap YES trigger for %s: ask=%s <= threshold=%s",
+                    market_slug, yes_ask, cheap_price
+                )
+            if no_ask is not None and no_ask <= cheap_price:
+                if px is None or no_ask < px:
+                    token_id = no_id
+                    side_label = "no"
+                    px = no_ask
+                    logger.debug(
+                        "Cheap NO trigger for %s: ask=%s <= threshold=%s",
+                        market_slug, no_ask, cheap_price
+                    )
 
         if token_id and px is not None:
             fill = engine.record_fill(
@@ -261,23 +301,20 @@ def run_btc_preclose_paper(
             )
 
     # Log near-close detections for debugging
-    logger.info(
-        "BTC preclose summary: scanned=%d, near_close=%d, fills=%d, window=%ds, cheap_price=%s",
-        scanned,
-        near_close,
-        fills,
-        window_seconds,
-        cheap_price,
-    )
     if near_close_log:
-        for entry in near_close_log:  # Log ALL near-close markets
-            logger.info(
-                "BTC preclose candidate: %s ttc=%.0fs yes_ask=%s no_ask=%s",
-                entry["market_slug"],
-                entry["time_to_close_seconds"],
-                entry["yes_ask"],
-                entry["no_ask"],
-            )
+        logger.info(
+            "BTC preclose scanned %d markets, %d near close, %d fills",
+            scanned,
+            near_close,
+            fills,
+        )
+        for entry in near_close_log[:5]:  # Log first 5 for brevity
+            logger.debug("Near-close: %s", entry)
+    else:
+        logger.debug(
+            "BTC preclose: no markets in close window (scanned=%d, window=%ds)",
+            scanned, window_seconds
+        )
 
     return {
         "timestamp": now.isoformat(),
@@ -289,19 +326,21 @@ def run_btc_preclose_paper(
         "fills_recorded": fills,
         "triggers": triggers,
         "near_close_log": near_close_log,
+        "force_trigger": force_trigger,
     }
 
 
 def run_btc_preclose_loop(
     *,
     data_dir: Path,
-    window_seconds: int = 900,  # Widened from 600 to 900 (15 min window)
-    cheap_price: Decimal = Decimal("0.25"),  # Temporarily widened from 0.08 to 0.25 to force fills
+    window_seconds: int = 1200,  # Widened from 600 to 1200 (20 min window)
+    cheap_price: Decimal = Decimal("0.05"),  # Lowered from 0.08 to 0.05 for higher sensitivity
     size: Decimal = Decimal("1"),
     starting_cash: Decimal = Decimal("0"),
     loop_duration_minutes: int = 10,
     interval_seconds: int = 60,
     snapshots_dir: Path | None = None,
+    backup_trigger_interval_seconds: int = 14400,  # 4 hours: time-based backup trigger
 ) -> dict[str, Any]:
     """Run BTC preclose paper trading in a loop for extended coverage.
 
@@ -317,27 +356,47 @@ def run_btc_preclose_loop(
         loop_duration_minutes: How long to run the loop (default: 10 min)
         interval_seconds: Seconds between scans (default: 60)
         snapshots_dir: Directory with collector snapshots
+        backup_trigger_interval_seconds: Time-based backup trigger interval (default: 4h)
 
     Returns:
         Dict with aggregated results from all iterations
     """
     start_time = datetime.now(UTC)
     end_time = start_time + timedelta(minutes=loop_duration_minutes)
-    
+    last_backup_trigger = start_time
+
     all_triggers: list[dict[str, Any]] = []
     total_scanned = 0
     total_near_close = 0
     total_fills = 0
+    total_backup_fills = 0
     iterations = 0
-    
+    backup_triggers_fired = 0
+
     logger.info(
-        "Starting BTC preclose loop for %d minutes, scanning every %d seconds",
+        "Starting BTC preclose loop for %d minutes, scanning every %d seconds, "
+        "backup trigger every %d seconds",
         loop_duration_minutes,
         interval_seconds,
+        backup_trigger_interval_seconds,
     )
 
     while datetime.now(UTC) < end_time:
         iterations += 1
+
+        # Check if time-based backup trigger should fire
+        now = datetime.now(UTC)
+        time_since_backup = (now - last_backup_trigger).total_seconds()
+        use_force_trigger = time_since_backup >= backup_trigger_interval_seconds
+
+        if use_force_trigger:
+            logger.info(
+                "Time-based backup trigger activated (%.0fs since last trigger)",
+                time_since_backup
+            )
+            backup_triggers_fired += 1
+            last_backup_trigger = now
+
         result = run_btc_preclose_paper(
             data_dir=data_dir,
             window_seconds=window_seconds,
@@ -345,18 +404,24 @@ def run_btc_preclose_loop(
             size=size,
             starting_cash=starting_cash,
             snapshots_dir=snapshots_dir,
+            force_trigger=use_force_trigger,
         )
         
         total_scanned += result["markets_scanned"]
         total_near_close += result["candidates_near_close"]
         total_fills += result["fills_recorded"]
         all_triggers.extend(result["triggers"])
-        
+
+        if use_force_trigger and result["fills_recorded"] > 0:
+            total_backup_fills += result["fills_recorded"]
+
         if result["fills_recorded"] > 0:
+            trigger_type = "backup" if use_force_trigger else "normal"
             logger.info(
-                "Loop iteration %d: %d fills recorded",
+                "Loop iteration %d: %d fills recorded (%s trigger)",
                 iterations,
                 result["fills_recorded"],
+                trigger_type,
             )
         
         # Sleep until next iteration
@@ -378,5 +443,8 @@ def run_btc_preclose_loop(
         "total_markets_scanned": total_scanned,
         "total_candidates_near_close": total_near_close,
         "total_fills_recorded": total_fills,
+        "total_backup_fills": total_backup_fills,
+        "backup_triggers_fired": backup_triggers_fired,
+        "backup_trigger_interval_seconds": backup_trigger_interval_seconds,
         "all_triggers": all_triggers,
     }
