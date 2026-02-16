@@ -1088,6 +1088,8 @@ def cmd_watchdog(args: argparse.Namespace) -> None:
         print(f"{status}: {result['message']}")
         if result["age_seconds"] is not None:
             print(f"  Age: {result['age_seconds']:.1f}s (max: {args.max_age_seconds}s)")
+        if result.get("last_successful_snapshot"):
+            print(f"  Last successful snapshot: {result['last_successful_snapshot']}")
         print(f"  Collector running: {result['collector_running']}")
         if result["collector_pid"]:
             print(f"  PID: {result['collector_pid']}")

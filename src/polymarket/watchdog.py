@@ -95,6 +95,28 @@ class CollectorWatchdog:
             self._log(f"Error checking latest file: {e}", level="error")
             return None
 
+    def get_last_successful_snapshot_time(self) -> datetime | None:
+        """Get the last successful snapshot time from latest_15m.json.
+
+        Reads the generated_at field from the latest_15m.json file.
+
+        Returns:
+            Datetime of last successful snapshot, or None if not found/unparseable.
+        """
+        if not self.latest_path.exists():
+            return None
+
+        try:
+            data = json.loads(self.latest_path.read_text())
+            generated_at = data.get("generated_at")
+            if generated_at:
+                # Parse ISO format datetime
+                return datetime.fromisoformat(generated_at)
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            self._log(f"Error reading snapshot time: {e}", level="warning")
+
+        return None
+
     def is_fresh(self) -> tuple[bool, float | None, str]:
         """Check if latest_15m.json is fresh.
 
@@ -222,11 +244,17 @@ class CollectorWatchdog:
             "timestamp": datetime.now(UTC).isoformat(),
             "fresh": False,
             "age_seconds": None,
+            "last_successful_snapshot": None,
             "collector_running": False,
             "collector_pid": None,
             "action_taken": None,
             "message": "",
         }
+
+        # Get last successful snapshot time
+        last_snapshot_time = self.get_last_successful_snapshot_time()
+        if last_snapshot_time:
+            result["last_successful_snapshot"] = last_snapshot_time.isoformat()
 
         # Check freshness
         is_fresh, age, message = self.is_fresh()
@@ -234,7 +262,11 @@ class CollectorWatchdog:
         result["age_seconds"] = age
         result["message"] = message
 
-        self._log(f"Freshness check: {message}", level="info", extra={"fresh": is_fresh, "age": age})
+        self._log(
+            f"Freshness check: {message}",
+            level="info",
+            extra={"fresh": is_fresh, "age": age, "last_snapshot": result["last_successful_snapshot"]},
+        )
 
         if is_fresh:
             # Data is fresh, nothing to do
@@ -243,7 +275,11 @@ class CollectorWatchdog:
             return result
 
         # Data is stale or missing
-        self._log(f"Data stale or missing: {message}", level="warning")
+        restart_reason = f"Data stale: latest_15m.json age {age:.1f}s exceeds max {self.max_age_seconds:.1f}s"
+        if last_snapshot_time:
+            restart_reason += f", last successful snapshot at {last_snapshot_time.isoformat()}"
+
+        self._log(restart_reason, level="warning")
 
         # Check if collector is running
         is_running, pid = self.is_collector_running()
@@ -257,21 +293,31 @@ class CollectorWatchdog:
             self._log(
                 "Collector running but data stale",
                 level="warning",
-                extra={"pid": pid, "age": age},
+                extra={"pid": pid, "age": age, "last_snapshot": result["last_successful_snapshot"]},
             )
             return result
 
         # Collector not running and data is stale - need to restart
         if dry_run:
             result["action_taken"] = "would_restart"
-            result["message"] = "Would restart collector (dry run)"
-            self._log("Would restart collector (dry run)", level="info")
+            result["message"] = f"Would restart collector (dry run): {restart_reason}"
+            self._log(f"Would restart collector (dry run): {restart_reason}", level="info")
         else:
             success, new_pid, msg = self.start_collector()
             if success:
                 result["action_taken"] = "restarted"
                 result["collector_pid"] = new_pid
-                result["message"] = msg
+                result["message"] = f"{msg} | Reason: {restart_reason}"
+                self._log(
+                    f"Collector restarted | Reason: {restart_reason}",
+                    level="info",
+                    extra={
+                        "pid": new_pid,
+                        "restart_reason": restart_reason,
+                        "last_snapshot": result["last_successful_snapshot"],
+                        "stale_age_seconds": age,
+                    },
+                )
             else:
                 result["action_taken"] = "failed"
                 result["message"] = msg
