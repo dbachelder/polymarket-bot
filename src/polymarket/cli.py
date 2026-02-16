@@ -3090,6 +3090,8 @@ def main() -> None:
     btcpl.add_argument("--snapshots-dir", default="data", help="Directory with collector snapshots (default: data)")
     btcpl.add_argument("--window-seconds", type=int, default=300, help="Time window before close (default: 300s)")
     btcpl.add_argument("--cheap-price", type=float, default=0.05, help="Cheap price threshold (default: 0.05)")
+    btcpl.add_argument("--fair-price-threshold", type=float, default=0.35, help="Wide-spread entry threshold (default: 0.35)")
+    btcpl.add_argument("--wide-spread-threshold", type=float, default=0.10, help="Spread > this triggers fair-price entry (default: 0.10)")
     btcpl.add_argument("--size", type=float, default=1.0)
     btcpl.add_argument("--starting-cash", type=float, default=0.0)
     btcpl.add_argument("--loop-duration-minutes", type=int, default=10, help="How long to run (default: 10 min)")
