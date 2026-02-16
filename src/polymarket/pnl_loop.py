@@ -18,7 +18,12 @@ from .fills_collector import (
     collect_fills,
     get_fills_summary,
 )
-from .pnl import PnLVerifier, load_fills_from_file, load_orderbooks_from_snapshot, save_daily_summary
+from .pnl import (
+    PnLVerifier,
+    load_fills_from_file,
+    load_orderbooks_from_snapshot,
+    save_daily_summary,
+)
 
 if TYPE_CHECKING:
     from decimal import Decimal

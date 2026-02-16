@@ -221,20 +221,24 @@ class TestTraderProfiler:
         profiler = TraderProfiler(data_dir=tmp_path)
 
         # Add traders with different performance
-        profiler.add_or_update_trader(TraderProfile(
-            address="0x1",
-            pnl_30d=Decimal("10000"),
-            volume_lifetime=Decimal("1000000"),
-            markets_traded=10,
-            source="leaderboard",
-        ))
-        profiler.add_or_update_trader(TraderProfile(
-            address="0x2",
-            pnl_30d=Decimal("1000"),
-            volume_lifetime=Decimal("100000"),
-            markets_traded=5,
-            source="leaderboard",
-        ))
+        profiler.add_or_update_trader(
+            TraderProfile(
+                address="0x1",
+                pnl_30d=Decimal("10000"),
+                volume_lifetime=Decimal("1000000"),
+                markets_traded=10,
+                source="leaderboard",
+            )
+        )
+        profiler.add_or_update_trader(
+            TraderProfile(
+                address="0x2",
+                pnl_30d=Decimal("1000"),
+                volume_lifetime=Decimal("100000"),
+                markets_traded=5,
+                source="leaderboard",
+            )
+        )
 
         scores = profiler.compute_scores(min_volume=Decimal("1000"), min_markets=2)
 
@@ -249,13 +253,15 @@ class TestTraderProfiler:
 
         # Add traders and compute scores
         for i in range(10):
-            profiler.add_or_update_trader(TraderProfile(
-                address=f"0x{i}",
-                pnl_30d=Decimal(str(10000 - i * 1000)),
-                volume_lifetime=Decimal("100000"),
-                markets_traded=5,
-                source="leaderboard",
-            ))
+            profiler.add_or_update_trader(
+                TraderProfile(
+                    address=f"0x{i}",
+                    pnl_30d=Decimal(str(10000 - i * 1000)),
+                    volume_lifetime=Decimal("100000"),
+                    markets_traded=5,
+                    source="leaderboard",
+                )
+            )
 
         profiler.compute_scores()
         top = profiler.get_top_traders(k=3)
@@ -273,13 +279,15 @@ class TestTraderProfilerFiltering:
         """Test that compute_scores filters by volume."""
         profiler = TraderProfiler(data_dir=tmp_path)
 
-        profiler.add_or_update_trader(TraderProfile(
-            address="0x1",
-            pnl_30d=Decimal("10000"),
-            volume_lifetime=Decimal("100"),  # Below threshold
-            markets_traded=10,
-            source="leaderboard",
-        ))
+        profiler.add_or_update_trader(
+            TraderProfile(
+                address="0x1",
+                pnl_30d=Decimal("10000"),
+                volume_lifetime=Decimal("100"),  # Below threshold
+                markets_traded=10,
+                source="leaderboard",
+            )
+        )
 
         scores = profiler.compute_scores(min_volume=Decimal("1000"))
 
@@ -289,13 +297,15 @@ class TestTraderProfilerFiltering:
         """Test that compute_scores filters by markets traded."""
         profiler = TraderProfiler(data_dir=tmp_path)
 
-        profiler.add_or_update_trader(TraderProfile(
-            address="0x1",
-            pnl_30d=Decimal("10000"),
-            volume_lifetime=Decimal("100000"),
-            markets_traded=1,  # Below threshold
-            source="leaderboard",
-        ))
+        profiler.add_or_update_trader(
+            TraderProfile(
+                address="0x1",
+                pnl_30d=Decimal("10000"),
+                volume_lifetime=Decimal("100000"),
+                markets_traded=1,  # Below threshold
+                source="leaderboard",
+            )
+        )
 
         scores = profiler.compute_scores(min_markets=3)
 
@@ -306,20 +316,24 @@ class TestTraderProfilerFiltering:
         profiler = TraderProfiler(data_dir=tmp_path)
 
         # Add traders with varying scores
-        profiler.add_or_update_trader(TraderProfile(
-            address="0x1",
-            pnl_30d=Decimal("100000"),
-            volume_lifetime=Decimal("1000000"),
-            markets_traded=20,
-            source="leaderboard",
-        ))
-        profiler.add_or_update_trader(TraderProfile(
-            address="0x2",
-            pnl_30d=Decimal("100"),
-            volume_lifetime=Decimal("100000"),
-            markets_traded=3,
-            source="leaderboard",
-        ))
+        profiler.add_or_update_trader(
+            TraderProfile(
+                address="0x1",
+                pnl_30d=Decimal("100000"),
+                volume_lifetime=Decimal("1000000"),
+                markets_traded=20,
+                source="leaderboard",
+            )
+        )
+        profiler.add_or_update_trader(
+            TraderProfile(
+                address="0x2",
+                pnl_30d=Decimal("100"),
+                volume_lifetime=Decimal("100000"),
+                markets_traded=3,
+                source="leaderboard",
+            )
+        )
 
         profiler.compute_scores()
         top = profiler.get_top_traders(k=10, min_score=50.0)

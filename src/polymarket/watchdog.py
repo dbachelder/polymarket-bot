@@ -160,7 +160,8 @@ class CollectorWatchdog:
                 "nohup",
                 str(self.script_path),
                 "collect-15m-loop",
-                "--out", str(self.data_dir),
+                "--out",
+                str(self.data_dir),
             ]
 
             # Start process
@@ -234,7 +235,9 @@ class CollectorWatchdog:
         result["age_seconds"] = age
         result["message"] = message
 
-        self._log(f"Freshness check: {message}", level="info", extra={"fresh": is_fresh, "age": age})
+        self._log(
+            f"Freshness check: {message}", level="info", extra={"fresh": is_fresh, "age": age}
+        )
 
         if is_fresh:
             # Data is fresh, nothing to do

@@ -130,7 +130,9 @@ class SlippageModel:
         return cls(
             base_slippage_bps=data.get("base_slippage_bps", DEFAULT_SLIPPAGE_BPS),
             spread_impact_bps=data.get("spread_impact_bps", DEFAULT_SPREAD_IMPACT_BPS),
-            size_impact_factor=Decimal(str(data.get("size_impact_factor", DEFAULT_SIZE_IMPACT_FACTOR))),
+            size_impact_factor=Decimal(
+                str(data.get("size_impact_factor", DEFAULT_SIZE_IMPACT_FACTOR))
+            ),
             max_slippage_bps=data.get("max_slippage_bps", 200),
         )
 
@@ -566,7 +568,11 @@ class PaperCopyEngine:
 
         # Calculate slippage metrics
         slippage_amount = abs(copy_price - original_fill.price)
-        slippage_bps = (slippage_amount / original_fill.price) * 10000 if original_fill.price > 0 else Decimal("0")
+        slippage_bps = (
+            (slippage_amount / original_fill.price) * 10000
+            if original_fill.price > 0
+            else Decimal("0")
+        )
 
         copy_fill = CopyFill(
             copy_fill_id=fill_id,
@@ -576,7 +582,9 @@ class PaperCopyEngine:
             size=size,
             copy_price=copy_price,
             fee=fee,
-            original_trader=original_fill.transaction_hash or "unknown" if hasattr(original_fill, 'transaction_hash') else "unknown",
+            original_trader=original_fill.transaction_hash or "unknown"
+            if hasattr(original_fill, "transaction_hash")
+            else "unknown",
             original_tx_hash=original_fill.transaction_hash,
             original_price=original_fill.price,
             original_timestamp=original_fill.timestamp,
@@ -635,9 +643,7 @@ class PaperCopyEngine:
         fills = fill_tracker.load_fills(trader_address)
 
         # Find fills we haven't copied yet
-        existing_original_ids = {
-            f.original_tx_hash for f in self.fills if f.original_tx_hash
-        }
+        existing_original_ids = {f.original_tx_hash for f in self.fills if f.original_tx_hash}
 
         new_copies = []
         for fill in fills:

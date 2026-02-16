@@ -188,34 +188,38 @@ class TestCopyPosition:
         pos = CopyPosition(token_id="token123")
 
         # Buy at 0.55
-        pos.add_fill(CopyFill(
-            copy_fill_id="copy_001",
-            timestamp="2024-01-01T00:00:00+00:00",
-            token_id="token123",
-            side="buy",
-            size=Decimal("100"),
-            copy_price=Decimal("0.55"),
-            fee=Decimal("0.11"),
-            original_trader="0xabc",
-            original_tx_hash="0xoriginal",
-            original_price=Decimal("0.55"),
-            original_timestamp="2024-01-01T00:00:00+00:00",
-        ))
+        pos.add_fill(
+            CopyFill(
+                copy_fill_id="copy_001",
+                timestamp="2024-01-01T00:00:00+00:00",
+                token_id="token123",
+                side="buy",
+                size=Decimal("100"),
+                copy_price=Decimal("0.55"),
+                fee=Decimal("0.11"),
+                original_trader="0xabc",
+                original_tx_hash="0xoriginal",
+                original_price=Decimal("0.55"),
+                original_timestamp="2024-01-01T00:00:00+00:00",
+            )
+        )
 
         # Sell at 0.60
-        pos.add_fill(CopyFill(
-            copy_fill_id="copy_002",
-            timestamp="2024-01-01T01:00:00+00:00",
-            token_id="token123",
-            side="sell",
-            size=Decimal("100"),
-            copy_price=Decimal("0.60"),
-            fee=Decimal("0.12"),
-            original_trader="0xabc",
-            original_tx_hash="0xoriginal2",
-            original_price=Decimal("0.60"),
-            original_timestamp="2024-01-01T01:00:00+00:00",
-        ))
+        pos.add_fill(
+            CopyFill(
+                copy_fill_id="copy_002",
+                timestamp="2024-01-01T01:00:00+00:00",
+                token_id="token123",
+                side="sell",
+                size=Decimal("100"),
+                copy_price=Decimal("0.60"),
+                fee=Decimal("0.12"),
+                original_trader="0xabc",
+                original_tx_hash="0xoriginal2",
+                original_price=Decimal("0.60"),
+                original_timestamp="2024-01-01T01:00:00+00:00",
+            )
+        )
 
         # Realized PnL: 60 - 55 - 0.12 = 4.88
         assert pos.realized_pnl == Decimal("4.88")
@@ -370,15 +374,17 @@ class TestPaperCopyEngine:
         engine = PaperCopyEngine(data_dir=tmp_path)
 
         # Add a position
-        engine.copy_trade(TraderFill(
-            token_id="token123",
-            side="buy",
-            size=Decimal("100"),
-            price=Decimal("0.55"),
-            fee=Decimal("0.11"),
-            timestamp="2024-01-01T00:00:00+00:00",
-            transaction_hash="0x1",
-        ))
+        engine.copy_trade(
+            TraderFill(
+                token_id="token123",
+                side="buy",
+                size=Decimal("100"),
+                price=Decimal("0.55"),
+                fee=Decimal("0.11"),
+                timestamp="2024-01-01T00:00:00+00:00",
+                transaction_hash="0x1",
+            )
+        )
 
         equity = engine.compute_equity(current_prices={"token123": Decimal("0.60")})
 
@@ -394,15 +400,17 @@ class TestPaperCopyEngine:
         engine = PaperCopyEngine(data_dir=tmp_path)
 
         # Add a trade
-        engine.copy_trade(TraderFill(
-            token_id="token123",
-            side="buy",
-            size=Decimal("100"),
-            price=Decimal("0.55"),
-            fee=Decimal("0.11"),
-            timestamp="2024-01-01T00:00:00+00:00",
-            transaction_hash="0x1",
-        ))
+        engine.copy_trade(
+            TraderFill(
+                token_id="token123",
+                side="buy",
+                size=Decimal("100"),
+                price=Decimal("0.55"),
+                fee=Decimal("0.11"),
+                timestamp="2024-01-01T00:00:00+00:00",
+                transaction_hash="0x1",
+            )
+        )
 
         summary = engine.get_performance_summary()
 

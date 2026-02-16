@@ -287,7 +287,9 @@ class CopytradeProfiler:
             sorted_fills = sorted(token_fills, key=lambda f: f.timestamp)
 
             # Track buy queue (FIFO)
-            buy_queue: list[tuple[datetime, Decimal, Decimal, Decimal]] = []  # (time, size, price, fee)
+            buy_queue: list[
+                tuple[datetime, Decimal, Decimal, Decimal]
+            ] = []  # (time, size, price, fee)
 
             for fill in sorted_fills:
                 fill_time = self._parse_timestamp(fill.timestamp)
@@ -330,18 +332,22 @@ class CopytradeProfiler:
                         else:
                             realized_pnl_pct = Decimal("0")
 
-                        round_trips.append(TradeRoundTrip(
-                            token_id=token_id,
-                            market_slug=fill.market_slug,
-                            entry_time=entry_time,
-                            exit_time=fill_time,
-                            entry_price=total_cost / matched_size if matched_size > 0 else Decimal("0"),
-                            exit_price=fill.price,
-                            size=matched_size,
-                            fees=fees,
-                            realized_pnl=realized_pnl,
-                            realized_pnl_pct=realized_pnl_pct,
-                        ))
+                        round_trips.append(
+                            TradeRoundTrip(
+                                token_id=token_id,
+                                market_slug=fill.market_slug,
+                                entry_time=entry_time,
+                                exit_time=fill_time,
+                                entry_price=total_cost / matched_size
+                                if matched_size > 0
+                                else Decimal("0"),
+                                exit_price=fill.price,
+                                size=matched_size,
+                                fees=fees,
+                                realized_pnl=realized_pnl,
+                                realized_pnl_pct=realized_pnl_pct,
+                            )
+                        )
 
         return round_trips
 
@@ -410,7 +416,7 @@ class CopytradeProfiler:
         if len(pnls) > 1:
             mean_pnl = float(metrics.avg_trade_pnl)
             variance = sum((float(p) - mean_pnl) ** 2 for p in pnls) / (len(pnls) - 1)
-            metrics.pnl_volatility = variance ** 0.5
+            metrics.pnl_volatility = variance**0.5
             if metrics.pnl_volatility > 0:
                 metrics.sharpe_like_ratio = mean_pnl / metrics.pnl_volatility
 
@@ -569,10 +575,10 @@ class CopytradeProfiler:
 
             # Overall score: weighted composite
             ranking.overall_score = (
-                ranking.pnl_score * 0.40 +
-                ranking.win_rate_score * 0.30 +
-                ranking.consistency_score * 0.20 +
-                ranking.experience_score * 0.10
+                ranking.pnl_score * 0.40
+                + ranking.win_rate_score * 0.30
+                + ranking.consistency_score * 0.20
+                + ranking.experience_score * 0.10
             )
 
             rankings.append(ranking)

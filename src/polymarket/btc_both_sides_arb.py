@@ -247,10 +247,7 @@ def check_mispricing(
     price_sum = up_price + down_price
     spread_after_fees = calculate_spread_after_fees(up_price, down_price)
 
-    is_mispriced = (
-        price_sum < Decimal("1.0") - fee_buffer
-        and spread_after_fees >= min_spread
-    )
+    is_mispriced = price_sum < Decimal("1.0") - fee_buffer and spread_after_fees >= min_spread
 
     return is_mispriced, spread_after_fees
 
@@ -280,7 +277,9 @@ def calculate_confidence(
     confidence = Decimal("0.5")
 
     # Price sanity check - prices should be between 0.01 and 0.99
-    if Decimal("0.01") <= up_price <= Decimal("0.99") and Decimal("0.01") <= down_price <= Decimal("0.99"):
+    if Decimal("0.01") <= up_price <= Decimal("0.99") and Decimal("0.01") <= down_price <= Decimal(
+        "0.99"
+    ):
         confidence += Decimal("0.1")
 
     # Neither side should be extremely cheap (indicates resolution)
@@ -447,27 +446,29 @@ def find_both_sides_opportunities(
             price_sum = up_ask + down_ask
             spread = Decimal("1.0") - price_sum
 
-            opportunities.append(BothSidesOpportunity(
-                market_id=market.market_id,
-                event_id=market.event_id,
-                interval=interval,
-                up_token_id=market.clob_token_ids[0],
-                down_token_id=market.clob_token_ids[1],
-                up_price=up_ask,
-                down_price=down_ask,
-                price_sum=price_sum,
-                fee_buffer=TOTAL_FEE_BUFFER,
-                spread=spread,
-                spread_after_fees=spread_after_fees,
-                aligned_15m=aligned_15m,
-                confidence=confidence,
-                timestamp=datetime.now(UTC).isoformat(),
-                market_metadata={
-                    "title": market.title,
-                    "question": market.question,
-                    "end_date": market.end_date,
-                },
-            ))
+            opportunities.append(
+                BothSidesOpportunity(
+                    market_id=market.market_id,
+                    event_id=market.event_id,
+                    interval=interval,
+                    up_token_id=market.clob_token_ids[0],
+                    down_token_id=market.clob_token_ids[1],
+                    up_price=up_ask,
+                    down_price=down_ask,
+                    price_sum=price_sum,
+                    fee_buffer=TOTAL_FEE_BUFFER,
+                    spread=spread,
+                    spread_after_fees=spread_after_fees,
+                    aligned_15m=aligned_15m,
+                    confidence=confidence,
+                    timestamp=datetime.now(UTC).isoformat(),
+                    market_metadata={
+                        "title": market.title,
+                        "question": market.question,
+                        "end_date": market.end_date,
+                    },
+                )
+            )
 
         except Exception:
             # Skip markets that fail to fetch
@@ -598,7 +599,11 @@ class BothSidesArbitrageStrategy:
         Returns:
             List of opportunities found.
         """
-        from .site import extract_crypto_interval_events, fetch_crypto_interval_page, parse_next_data
+        from .site import (
+            extract_crypto_interval_events,
+            fetch_crypto_interval_page,
+            parse_next_data,
+        )
 
         # Fetch markets for the specified interval
         html = fetch_crypto_interval_page(interval.upper())
@@ -703,12 +708,8 @@ class BothSidesArbitrageStrategy:
             stats["total_trades"] = len(trades)
             stats["open_trades"] = sum(1 for t in trades if t.status == "open")
             stats["closed_trades"] = sum(1 for t in trades if t.status == "closed")
-            stats["aligned_trades"] = sum(
-                1 for t in trades if t.aligned_15m is True
-            )
-            stats["non_aligned_trades"] = sum(
-                1 for t in trades if t.aligned_15m is False
-            )
+            stats["aligned_trades"] = sum(1 for t in trades if t.aligned_15m is True)
+            stats["non_aligned_trades"] = sum(1 for t in trades if t.aligned_15m is False)
 
             closed_pnls = [t.net_pnl for t in trades if t.net_pnl is not None]
             if closed_pnls:

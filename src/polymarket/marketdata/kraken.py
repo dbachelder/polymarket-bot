@@ -91,9 +91,7 @@ class KrakenProvider(MarketDataProvider):
 
             # Kraken returns { "error": [], "result": { ... } }
             if data.get("error"):
-                raise ProviderUnavailableError(
-                    f"Kraken API error: {data['error']}"
-                )
+                raise ProviderUnavailableError(f"Kraken API error: {data['error']}")
 
             return data.get("result", {})
 
@@ -135,7 +133,7 @@ class KrakenProvider(MarketDataProvider):
         # Find the quote currency
         for quote in sorted(quote_mapping.keys(), key=len, reverse=True):
             if symbol.endswith(quote):
-                base = symbol[:-len(quote)]
+                base = symbol[: -len(quote)]
                 kraken_base = base_mapping.get(base, base)
                 kraken_quote = quote_mapping[quote]
                 return f"{kraken_base}{kraken_quote}"
