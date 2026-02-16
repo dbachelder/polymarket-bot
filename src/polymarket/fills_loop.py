@@ -22,8 +22,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_DATA_DIR = Path("data")
 DEFAULT_FILLS_PATH = Path("data/fills.jsonl")
 DEFAULT_PAPER_FILLS_PATH = Path("data/paper_trading/fills.jsonl")
-DEFAULT_INTERVAL_SECONDS = 300.0  # 5 minutes
+DEFAULT_INTERVAL_SECONDS = 60.0  # 60 seconds as per ticket requirement
 DEFAULT_STALE_ALERT_HOURS = 6.0
+DEFAULT_OVERLAP_HOURS = 2.0
 
 
 def _send_openclaw_notification(message: str) -> None:
@@ -83,7 +84,9 @@ def run_collect_fills_loop(
     include_account: bool = True,
     include_paper: bool = True,
     stale_alert_hours: float = DEFAULT_STALE_ALERT_HOURS,
+    overlap_hours: float = DEFAULT_OVERLAP_HOURS,
     on_stale_alert: Callable[[str], None] | None = None,
+    max_backoff_seconds: float = 300.0,
 ) -> None:
     """Run continuous fills collection loop.
 
@@ -91,11 +94,13 @@ def run_collect_fills_loop(
         data_dir: Base data directory
         fills_path: Output path for fills.jsonl
         paper_fills_path: Path to paper trading fills.jsonl
-        interval_seconds: Seconds between collection runs
+        interval_seconds: Seconds between collection runs (default: 60s)
         include_account: Whether to fetch real account fills
         include_paper: Whether to include paper trading fills
-        stale_alert_hours: Hours before triggering stale alert
+        stale_alert_hours: Hours before triggering stale alert (default: 6h)
+        overlap_hours: Hours of overlap when querying from last_seen_ts (default: 2h)
         on_stale_alert: Optional callback for stale alerts
+        max_backoff_seconds: Maximum backoff on errors
     """
     if data_dir is None:
         data_dir = DEFAULT_DATA_DIR
@@ -109,42 +114,61 @@ def run_collect_fills_loop(
     paper_fills_path = Path(paper_fills_path)
 
     logger.info(
-        "Starting collect-fills loop: interval=%.0fs account=%s paper=%s",
+        "Starting collect-fills loop: interval=%.0fs, overlap=%.1fh, stale_threshold=%.1fh, account=%s, paper=%s",
         interval_seconds,
+        overlap_hours,
+        stale_alert_hours,
         include_account,
         include_paper,
     )
 
     iteration = 0
+    base_interval = max(1.0, float(interval_seconds))
+    backoff = base_interval
+
     while True:
         started = time.time()
         iteration += 1
 
         try:
-            # Collect fills
+            # Collect fills with overlap and health check
             logger.debug("Iteration %d: collecting fills...", iteration)
             collect_result = collect_fills(
                 fills_path=fills_path,
                 paper_fills_path=paper_fills_path,
                 include_account=include_account,
                 include_paper=include_paper,
+                since=None,  # Always use last_seen_ts - overlap
+                overlap_hours=overlap_hours,
+                check_health=True,
+                stale_hours=stale_alert_hours,
             )
 
             # Log collection results
             logger.info(
-                "Collected %d fills (%d account, %d paper, %d duplicates)",
+                "Iteration %d: appended=%d, account=%d, paper=%d, duplicates=%d",
+                iteration,
                 collect_result["total_appended"],
                 collect_result["account_fills"],
                 collect_result["paper_fills"],
                 collect_result["duplicates_skipped"],
             )
 
-            # Check staleness
+            # Log detailed query info for debugging
+            if collect_result.get("query_since"):
+                logger.debug(
+                    "Query params: last_seen_ts=%s, query_since=%s, overlap=%.1fh",
+                    collect_result.get("last_seen_ts"),
+                    collect_result.get("query_since"),
+                    collect_result.get("overlap_hours"),
+                )
+
+            # Check staleness for alerting
             staleness = check_fills_staleness(fills_path, stale_alert_hours)
 
             if staleness["age_hours"] is not None:
                 logger.info(
-                    "Fill age: %.2fh (threshold: %.1fh) fills=%d",
+                    "Fill age: %.2fh (threshold: %.1fh) total_fills=%d",
                     staleness["age_hours"],
                     stale_alert_hours,
                     staleness["total_fills"],
@@ -172,12 +196,17 @@ def run_collect_fills_loop(
                 else:
                     _send_openclaw_notification(notification)
 
+            # Reset backoff on success
+            backoff = base_interval
+
         except Exception:
             logger.exception("Error in collect-fills loop iteration %d", iteration)
+            # Increase backoff on error
+            backoff = min(max_backoff_seconds, backoff * 2)
 
         # Sleep until next iteration
         elapsed = time.time() - started
-        sleep_for = max(0.0, interval_seconds - elapsed)
-        sleep_for += random.uniform(0.0, min(10.0, interval_seconds * 0.05))  # Small jitter
+        sleep_for = max(0.0, backoff - elapsed)
+        sleep_for += random.uniform(0.0, min(5.0, interval_seconds * 0.1))  # Small jitter
         logger.debug("Sleeping for %.1fs", sleep_for)
         time.sleep(sleep_for)

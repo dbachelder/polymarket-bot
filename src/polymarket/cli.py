@@ -247,12 +247,14 @@ def cmd_fills_monitor(args: argparse.Namespace) -> None:
         print(f"Status: {out['status']}")
         print(f"Message: {out['message']}")
         print(f"Total fills: {out['total_fills']}")
-        if out['hours_since_last_fill']:
+        if out["hours_since_last_fill"]:
             print(f"Hours since last fill: {out['hours_since_last_fill']}")
-        if out.get('alert_triggered'):
+        if out.get("alert_triggered"):
             print("ALERT: Fills are stale!")
-        if out.get('auto_adjusted'):
-            print(f"Auto-adjusted: price={out['new_cheap_price']}, window={out['new_window_seconds']}s")
+        if out.get("auto_adjusted"):
+            print(
+                f"Auto-adjusted: price={out['new_cheap_price']}, window={out['new_window_seconds']}s"
+            )
         print("=" * 70)
 
 
@@ -727,7 +729,7 @@ def cmd_weather_scan(args: argparse.Namespace) -> None:
         print(f"Dry run: {result.get('dry_run', True)}")
 
         # Show consensus
-        if result.get("consensus"): 
+        if result.get("consensus"):
             print("\n--- Model Consensus ---")
             for city, cons in result["consensus"].items():
                 print(
@@ -1258,14 +1260,16 @@ def cmd_no_bias_scan(args: argparse.Namespace) -> None:
         print(f"Capital deployed: ${result['total_capital_deployed']:,.2f}")
         print(f"Dry run: {result['dry_run']}")
 
-        if result['signals']:
+        if result["signals"]:
             print("\n--- Top Signals ---")
-            for sig in result['signals'][:10]:
+            for sig in result["signals"][:10]:
                 print(f"\n  {sig['market_question'][:50]}...")
                 print(f"    Vertical: {sig['vertical']}")
                 print(f"    YES ask: {sig['yes_ask']:.1%} | Base rate: {sig['base_rate']:.1%}")
                 print(f"    Mispricing: {sig['mispricing_ratio']:.1f}x | Edge: {sig['edge']:.1%}")
-                print(f"    Confidence: {sig['confidence']:.1%} | Volume: ${sig['volume_usd']:,.0f}")
+                print(
+                    f"    Confidence: {sig['confidence']:.1%} | Volume: ${sig['volume_usd']:,.0f}"
+                )
 
         print("\n" + "=" * 70)
 
@@ -1287,22 +1291,24 @@ def cmd_no_bias_positions(args: argparse.Namespace) -> None:
         print("NO BIAS EXPLOIT POSITIONS")
         print("=" * 70)
 
-        summary = result['summary']
+        summary = result["summary"]
         print("\n--- Performance Summary ---")
         print(f"Total trades:     {summary['total_trades']}")
         print(f"Win rate:         {summary['win_rate']:.1%}")
         print(f"Total PnL:        ${summary['total_pnl']:,.2f}")
         print(f"Avg PnL/trade:    ${summary['avg_pnl']:,.2f}")
 
-        if summary.get('by_vertical'):
+        if summary.get("by_vertical"):
             print("\n--- By Vertical ---")
-            for vertical, stats in summary['by_vertical'].items():
-                print(f"  {vertical}: {stats['trades']} trades, "
-                      f"{stats['win_rate']:.1%} WR, ${stats['total_pnl']:,.2f}")
+            for vertical, stats in summary["by_vertical"].items():
+                print(
+                    f"  {vertical}: {stats['trades']} trades, "
+                    f"{stats['win_rate']:.1%} WR, ${stats['total_pnl']:,.2f}"
+                )
 
-        if result['open_positions']:
+        if result["open_positions"]:
             print(f"\n--- Open Positions ({result['open_count']}) ---")
-            for p in result['open_positions']:
+            for p in result["open_positions"]:
                 print(f"\n  {p['position_id']}")
                 print(f"    Market: {p['market'][:50]}...")
                 print(f"    Vertical: {p['vertical']} | Entry: {p['entry_price']:.3f}")
@@ -1334,9 +1340,9 @@ def cmd_discounted_outcome_scan(args: argparse.Namespace) -> None:
         print(f"Snapshot: {result['snapshot']}")
         print(f"Markets discounted: {result['markets_discounted']}")
 
-        if result.get('by_vertical'):
+        if result.get("by_vertical"):
             print("\n--- By Vertical ---")
-            for vertical, count in result['by_vertical'].items():
+            for vertical, count in result["by_vertical"].items():
                 print(f"  {vertical}: {count} markets")
 
         print(f"\nSignals confirmed: {result['signals_confirmed']}")
@@ -1344,17 +1350,17 @@ def cmd_discounted_outcome_scan(args: argparse.Namespace) -> None:
         print(f"Trades executed: {result['trades_executed']}")
         print(f"Dry run: {result['dry_run']}")
 
-        if result.get('top_confirmed_signals'):
+        if result.get("top_confirmed_signals"):
             print("\n--- Top Confirmed Signals ---")
-            for sig in result['top_confirmed_signals'][:5]:
-                m = sig['market']
+            for sig in result["top_confirmed_signals"][:5]:
+                m = sig["market"]
                 print(f"\n  {m['question'][:50]}...")
                 print(f"    Side: {m['discounted_side']} @ {m['discounted_price']:.3f}")
                 print(f"    Confidence: {sig['confidence_score']:.2f}")
                 print(f"    Insiders: {sig['confirmation_count']}")
 
-        if result.get('performance'):
-            perf = result['performance']
+        if result.get("performance"):
+            perf = result["performance"]
             print("\n--- Performance Summary ---")
             print(f"Total trades: {perf['total_trades']}")
             print(f"Resolved: {perf['resolved_trades']}")
@@ -1378,13 +1384,17 @@ def cmd_discounted_outcome_performance(args: argparse.Namespace) -> None:
     by_vertical = tracker.get_trades_by_vertical()
 
     if args.format == "json":
-        print(json.dumps({
-            "performance": perf.to_dict(),
-            "by_vertical": {
-                v: [t.to_dict() for t in trades]
-                for v, trades in by_vertical.items()
-            }
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "performance": perf.to_dict(),
+                    "by_vertical": {
+                        v: [t.to_dict() for t in trades] for v, trades in by_vertical.items()
+                    },
+                },
+                indent=2,
+            )
+        )
     else:
         print("=" * 70)
         print("DISCOUNTED OUTCOME ARBITRAGE PERFORMANCE")
@@ -1414,7 +1424,9 @@ def cmd_discounted_outcome_performance(args: argparse.Namespace) -> None:
                 wins = [t for t in resolved if t.pnl and t.pnl > 0]
                 win_rate = (len(wins) / len(resolved) * 100) if resolved else 0
                 total_pnl = sum(t.pnl for t in resolved if t.pnl)
-                print(f"  {vertical}: {len(trades)} trades, {win_rate:.1f}% WR, ${float(total_pnl):,.2f}")
+                print(
+                    f"  {vertical}: {len(trades)} trades, {win_rate:.1f}% WR, ${float(total_pnl):,.2f}"
+                )
 
         print("\n" + "=" * 70)
 
@@ -1700,6 +1712,9 @@ def cmd_collect_fills(args: argparse.Namespace) -> None:
         include_account=args.account,
         include_paper=args.paper,
         since=since,
+        overlap_hours=args.overlap_hours,
+        check_health=args.check_health,
+        stale_hours=args.stale_hours,
     )
 
     if args.format == "json":
@@ -1710,10 +1725,18 @@ def cmd_collect_fills(args: argparse.Namespace) -> None:
         print("=" * 70)
         print(f"Fills file:       {result['fills_path']}")
         print(f"Since:            {result['since'] or 'beginning'}")
+        print(f"Last seen ts:     {result.get('last_seen_ts') or 'N/A'}")
+        print(f"Query since:      {result.get('query_since') or 'N/A'}")
+        print(f"Overlap hours:    {result.get('overlap_hours', 2)}")
         print(f"Account fills:    {result['account_fills']}")
         print(f"Paper fills:      {result['paper_fills']}")
         print(f"Duplicates:       {result['duplicates_skipped']}")
         print(f"Total appended:   {result['total_appended']}")
+        if result.get("health"):
+            health = result["health"]
+            print(f"Health:           {'✓ HEALTHY' if health['healthy'] else '✗ STALE'}")
+            if health.get("hours_since_last_fill"):
+                print(f"Hours since fill: {health['hours_since_last_fill']:.1f}h")
         print("=" * 70)
 
 
@@ -1731,6 +1754,8 @@ def cmd_collect_fills_loop(args: argparse.Namespace) -> None:
         include_account=args.account,
         include_paper=args.paper,
         stale_alert_hours=float(args.stale_alert_hours),
+        overlap_hours=float(args.overlap_hours),
+        max_backoff_seconds=float(args.max_backoff_seconds),
     )
 
 
@@ -1877,6 +1902,65 @@ def cmd_pnl_sanity_check(args: argparse.Namespace) -> None:
     # Exit with error code if check failed and --fail is set
     if args.fail and not result.passed:
         raise SystemExit(1)
+
+
+def cmd_hourly_digest(args: argparse.Namespace) -> None:
+    """Generate hourly digest report from snapshot data."""
+    from pathlib import Path
+
+    from .report import generate_hourly_digest
+
+    data_dir = Path(args.data_dir)
+    digest = generate_hourly_digest(data_dir, interval_seconds=args.interval_seconds)
+    output = digest.to_dict()
+
+    if args.format == "json":
+        print(json.dumps(output, indent=2))
+    else:
+        # Human-readable format
+        health = output["collector_health"]
+        btc = output["btc_microstructure"]
+        strategy = output["paper_strategy"]
+
+        print("=" * 60)
+        print("POLYMARKET HOURLY DIGEST")
+        print("=" * 60)
+        print(f"Generated: {output['generated_at']}")
+
+        print("\n--- Collector Health ---")
+        if health["latest_snapshot_at"]:
+            print(f"Latest snapshot: {health['latest_snapshot_at']}")
+            if health["freshness_seconds"] is not None:
+                print(f"Freshness: {health['freshness_seconds']:.1f}s ago")
+        else:
+            print("Latest snapshot: None found")
+        print(
+            f"Snapshots (last hour): {health['snapshots_last_hour']}/{health['expected_snapshots']}"
+        )
+        print(f"Capture rate: {health['capture_rate_pct']:.1f}%")
+        if health["backoff_evidence"]:
+            print("⚠️  Backoff detected (gaps in snapshot sequence)")
+
+        print("\n--- BTC 15m Microstructure ---")
+        print(f"Best bid: {btc['best_bid']}")
+        print(f"Best ask: {btc['best_ask']}")
+        if btc["spread"] is not None:
+            print(f"Spread: {btc['spread']:.4f} ({btc['spread_bps']:.2f} bps)")
+        print(f"Bid depth (top 5): {btc['best_bid_depth']:,.2f}")
+        print(f"Ask depth (top 5): {btc['best_ask_depth']:,.2f}")
+        if btc["depth_imbalance"] is not None:
+            imbalance_pct = btc["depth_imbalance"] * 100
+            side = "bid" if imbalance_pct > 0 else "ask"
+            print(f"Depth imbalance: {imbalance_pct:+.1f}% ({side} heavy)")
+
+        print("\n--- Paper Strategy (Momentum) ---")
+        print(f"Signal: {strategy['signal'].upper()}")
+        print(f"Confidence: {strategy['confidence'] * 100:.0f}%")
+        if strategy["mid_price_change_1h"] is not None:
+            print(f"1h price change: {strategy['mid_price_change_1h']:+.2f}%")
+        print(f"Reasoning: {strategy['reasoning']}")
+
+        print("\n" + "=" * 60)
 
 
 def cmd_dataset_join(args: argparse.Namespace) -> None:
@@ -2334,6 +2418,30 @@ def main() -> None:
         help="Skip paper trading fills",
     )
     cf.add_argument(
+        "--overlap-hours",
+        type=float,
+        default=2.0,
+        help="Hours of overlap when querying from last_seen_ts (default: 2.0)",
+    )
+    cf.add_argument(
+        "--check-health",
+        action="store_true",
+        default=True,
+        help="Check fills age health after collection (default: True)",
+    )
+    cf.add_argument(
+        "--no-check-health",
+        action="store_false",
+        dest="check_health",
+        help="Skip health check",
+    )
+    cf.add_argument(
+        "--stale-hours",
+        type=float,
+        default=6.0,
+        help="Hours to consider fills stale for health check (default: 6.0)",
+    )
+    cf.add_argument(
         "--format",
         choices=["json", "human"],
         default="human",
@@ -2364,8 +2472,20 @@ def main() -> None:
     cfl.add_argument(
         "--interval-seconds",
         type=float,
+        default=60.0,
+        help="Collection interval in seconds (default: 60 = 1 min)",
+    )
+    cfl.add_argument(
+        "--overlap-hours",
+        type=float,
+        default=2.0,
+        help="Hours of overlap when querying from last_seen_ts (default: 2.0)",
+    )
+    cfl.add_argument(
+        "--max-backoff-seconds",
+        type=float,
         default=300.0,
-        help="Collection interval in seconds (default: 300 = 5 min)",
+        help="Maximum backoff on errors (default: 300 = 5 min)",
     )
     cfl.add_argument(
         "--account",
@@ -2547,6 +2667,15 @@ def main() -> None:
         help="Exit with error code if sanity check fails",
     )
     psc.set_defaults(func=cmd_pnl_sanity_check)
+
+    # Hourly digest command
+    hd = sub.add_parser("hourly-digest", help="Generate hourly report from 15m snapshots")
+    hd.add_argument("--data-dir", default="data", help="Directory containing snapshot files")
+    hd.add_argument(
+        "--interval-seconds", type=float, default=5.0, help="Expected collection interval"
+    )
+    hd.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    hd.set_defaults(func=cmd_hourly_digest)
 
     ms = sub.add_parser("microstructure", help="Analyze market microstructure from snapshot")
     ms.add_argument(
@@ -3141,12 +3270,22 @@ def main() -> None:
         help="Paper-trade cheap-side trigger on BTC 5m markets near close",
     )
     btcpc.add_argument("--data-dir", default="data/paper_trading", help="Paper trading data dir")
-    btcpc.add_argument("--snapshots-dir", default="data", help="Directory with collector snapshots (default: data)")
-    btcpc.add_argument("--window-seconds", type=int, default=300, help="Time window before close (default: 300s)")
-    btcpc.add_argument("--cheap-price", type=float, default=0.05, help="Cheap price threshold (default: 0.05)")
+    btcpc.add_argument(
+        "--snapshots-dir", default="data", help="Directory with collector snapshots (default: data)"
+    )
+    btcpc.add_argument(
+        "--window-seconds", type=int, default=300, help="Time window before close (default: 300s)"
+    )
+    btcpc.add_argument(
+        "--cheap-price", type=float, default=0.05, help="Cheap price threshold (default: 0.05)"
+    )
     btcpc.add_argument("--size", type=float, default=1.0)
     btcpc.add_argument("--starting-cash", type=float, default=0.0)
-    btcpc.add_argument("--use-monitor-thresholds", action="store_true", help="Use auto-adjusted thresholds from fills monitor")
+    btcpc.add_argument(
+        "--use-monitor-thresholds",
+        action="store_true",
+        help="Use auto-adjusted thresholds from fills monitor",
+    )
     btcpc.add_argument("--format", choices=["json", "human"], default="human")
     btcpc.set_defaults(func=cmd_btc_preclose_paper)
 
@@ -3156,14 +3295,28 @@ def main() -> None:
         help="Run BTC preclose paper trading in a loop for extended coverage",
     )
     btcpl.add_argument("--data-dir", default="data/paper_trading", help="Paper trading data dir")
-    btcpl.add_argument("--snapshots-dir", default="data", help="Directory with collector snapshots (default: data)")
-    btcpl.add_argument("--window-seconds", type=int, default=300, help="Time window before close (default: 300s)")
-    btcpl.add_argument("--cheap-price", type=float, default=0.05, help="Cheap price threshold (default: 0.05)")
+    btcpl.add_argument(
+        "--snapshots-dir", default="data", help="Directory with collector snapshots (default: data)"
+    )
+    btcpl.add_argument(
+        "--window-seconds", type=int, default=300, help="Time window before close (default: 300s)"
+    )
+    btcpl.add_argument(
+        "--cheap-price", type=float, default=0.05, help="Cheap price threshold (default: 0.05)"
+    )
     btcpl.add_argument("--size", type=float, default=1.0)
     btcpl.add_argument("--starting-cash", type=float, default=0.0)
-    btcpl.add_argument("--loop-duration-minutes", type=int, default=10, help="How long to run (default: 10 min)")
-    btcpl.add_argument("--interval-seconds", type=int, default=60, help="Seconds between scans (default: 60)")
-    btcpl.add_argument("--use-monitor-thresholds", action="store_true", help="Use auto-adjusted thresholds from fills monitor")
+    btcpl.add_argument(
+        "--loop-duration-minutes", type=int, default=10, help="How long to run (default: 10 min)"
+    )
+    btcpl.add_argument(
+        "--interval-seconds", type=int, default=60, help="Seconds between scans (default: 60)"
+    )
+    btcpl.add_argument(
+        "--use-monitor-thresholds",
+        action="store_true",
+        help="Use auto-adjusted thresholds from fills monitor",
+    )
     btcpl.add_argument("--format", choices=["json", "human"], default="human")
     btcpl.set_defaults(func=cmd_btc_preclose_paper_loop)
 
@@ -3174,7 +3327,9 @@ def main() -> None:
     )
     fm.add_argument("--fills-path", default="data/fills.jsonl", help="Path to fills.jsonl")
     fm.add_argument("--stale-hours", type=int, default=6, help="Hours to consider fills stale")
-    fm.add_argument("--auto-adjust", action="store_true", default=True, help="Auto-adjust thresholds when stale")
+    fm.add_argument(
+        "--auto-adjust", action="store_true", default=True, help="Auto-adjust thresholds when stale"
+    )
     fm.add_argument("--format", choices=["json", "human"], default="human")
     fm.set_defaults(func=cmd_fills_monitor)
 
@@ -3471,7 +3626,9 @@ def main() -> None:
         default=None,
         help="Data directory for trade tracking",
     )
-    do_perf.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    do_perf.add_argument(
+        "--format", choices=["json", "human"], default="human", help="Output format"
+    )
     do_perf.set_defaults(func=cmd_discounted_outcome_performance)
 
     # Add trader profiling commands
