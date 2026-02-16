@@ -1717,6 +1717,23 @@ def cmd_collect_fills(args: argparse.Namespace) -> None:
         print("=" * 70)
 
 
+def cmd_collect_fills_loop(args: argparse.Namespace) -> None:
+    """Run continuous fills collection loop."""
+    from pathlib import Path
+
+    from .fills_loop import run_collect_fills_loop
+
+    run_collect_fills_loop(
+        data_dir=Path(args.data_dir) if args.data_dir else None,
+        fills_path=Path(args.fills_path) if args.fills_path else None,
+        paper_fills_path=Path(args.paper_fills_path) if args.paper_fills_path else None,
+        interval_seconds=float(args.interval_seconds),
+        include_account=args.account,
+        include_paper=args.paper,
+        stale_alert_hours=float(args.stale_alert_hours),
+    )
+
+
 def cmd_pnl_loop(args: argparse.Namespace) -> None:
     """Run PnL collection and verification loop."""
     from pathlib import Path
@@ -2380,6 +2397,64 @@ def main() -> None:
         help="Output format",
     )
     cf.set_defaults(func=cmd_collect_fills)
+
+    # Collect fills loop command
+    cfl = sub.add_parser(
+        "collect-fills-loop",
+        help="Run continuous fills collection loop with staleness alerts",
+    )
+    cfl.add_argument(
+        "--data-dir",
+        default="data",
+        help="Base data directory (default: data)",
+    )
+    cfl.add_argument(
+        "--fills-path",
+        default=None,
+        help="Output path for fills.jsonl (default: data/fills.jsonl)",
+    )
+    cfl.add_argument(
+        "--paper-fills-path",
+        default=None,
+        help="Path to paper trading fills.jsonl (default: data/paper_trading/fills.jsonl)",
+    )
+    cfl.add_argument(
+        "--interval-seconds",
+        type=float,
+        default=300.0,
+        help="Collection interval in seconds (default: 300 = 5 min)",
+    )
+    cfl.add_argument(
+        "--account",
+        action="store_true",
+        default=True,
+        help="Include real account fills (default: True)",
+    )
+    cfl.add_argument(
+        "--no-account",
+        action="store_false",
+        dest="account",
+        help="Skip account fills",
+    )
+    cfl.add_argument(
+        "--paper",
+        action="store_true",
+        default=True,
+        help="Include paper trading fills (default: True)",
+    )
+    cfl.add_argument(
+        "--no-paper",
+        action="store_false",
+        dest="paper",
+        help="Skip paper trading fills",
+    )
+    cfl.add_argument(
+        "--stale-alert-hours",
+        type=float,
+        default=6.0,
+        help="Hours before triggering stale alert (default: 6)",
+    )
+    cfl.set_defaults(func=cmd_collect_fills_loop)
 
     # PnL loop command
     pl = sub.add_parser(
