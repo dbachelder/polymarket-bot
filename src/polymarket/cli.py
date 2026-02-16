@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -929,7 +930,7 @@ def cmd_news_momentum_scan(args: argparse.Namespace) -> None:
     if args.headline:
         news_items = [
             NewsItem(
-                timestamp=datetime.now(UTC) - timedelta(seconds=args.seconds_ago),
+                timestamp=datetime.now(timezone.utc) - timedelta(seconds=args.seconds_ago),
                 source=args.source or "CLI",
                 source_reliability=SourceReliability[args.source_reliability],
                 headline=args.headline,
@@ -985,7 +986,7 @@ def cmd_news_momentum_scan(args: argparse.Namespace) -> None:
             print(f"  Avg confidence:  {result['summary']['avg_confidence']:.1%}")
 
         if result["signals"]:
-            print(f"\n--- Top Signals ---")
+            print("\n--- Top Signals ---")
             for sig in result["signals"][:10]:
                 market_q = sig["market_question"][:40] if sig["market_question"] else "Unknown"
                 print(
