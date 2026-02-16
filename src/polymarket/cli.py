@@ -1717,6 +1717,23 @@ def cmd_collect_fills(args: argparse.Namespace) -> None:
         print("=" * 70)
 
 
+def cmd_collect_fills_loop(args: argparse.Namespace) -> None:
+    """Run continuous fills collection loop."""
+    from pathlib import Path
+
+    from .fills_loop import run_collect_fills_loop
+
+    run_collect_fills_loop(
+        data_dir=Path(args.data_dir) if args.data_dir else None,
+        fills_path=Path(args.fills_path) if args.fills_path else None,
+        paper_fills_path=Path(args.paper_fills_path) if args.paper_fills_path else None,
+        interval_seconds=float(args.interval_seconds),
+        include_account=args.account,
+        include_paper=args.paper,
+        stale_alert_hours=float(args.stale_alert_hours),
+    )
+
+
 def cmd_pnl_loop(args: argparse.Namespace) -> None:
     """Run PnL collection and verification loop."""
     from pathlib import Path
@@ -1860,6 +1877,63 @@ def cmd_pnl_sanity_check(args: argparse.Namespace) -> None:
     # Exit with error code if check failed and --fail is set
     if args.fail and not result.passed:
         raise SystemExit(1)
+
+
+def cmd_hourly_digest(args: argparse.Namespace) -> None:
+    """Generate hourly digest report from snapshot data."""
+    from pathlib import Path
+
+    from .report import generate_hourly_digest
+
+    data_dir = Path(args.data_dir)
+    digest = generate_hourly_digest(data_dir, interval_seconds=args.interval_seconds)
+    output = digest.to_dict()
+
+    if args.format == "json":
+        print(json.dumps(output, indent=2))
+    else:
+        # Human-readable format
+        health = output["collector_health"]
+        btc = output["btc_microstructure"]
+        strategy = output["paper_strategy"]
+
+        print("=" * 60)
+        print("POLYMARKET HOURLY DIGEST")
+        print("=" * 60)
+        print(f"Generated: {output['generated_at']}")
+
+        print("\n--- Collector Health ---")
+        if health["latest_snapshot_at"]:
+            print(f"Latest snapshot: {health['latest_snapshot_at']}")
+            if health["freshness_seconds"] is not None:
+                print(f"Freshness: {health['freshness_seconds']:.1f}s ago")
+        else:
+            print("Latest snapshot: None found")
+        print(f"Snapshots (last hour): {health['snapshots_last_hour']}/{health['expected_snapshots']}")
+        print(f"Capture rate: {health['capture_rate_pct']:.1f}%")
+        if health["backoff_evidence"]:
+            print("⚠️  Backoff detected (gaps in snapshot sequence)")
+
+        print("\n--- BTC 15m Microstructure ---")
+        print(f"Best bid: {btc['best_bid']}")
+        print(f"Best ask: {btc['best_ask']}")
+        if btc["spread"] is not None:
+            print(f"Spread: {btc['spread']:.4f} ({btc['spread_bps']:.2f} bps)")
+        print(f"Bid depth (top 5): {btc['best_bid_depth']:,.2f}")
+        print(f"Ask depth (top 5): {btc['best_ask_depth']:,.2f}")
+        if btc["depth_imbalance"] is not None:
+            imbalance_pct = btc["depth_imbalance"] * 100
+            side = "bid" if imbalance_pct > 0 else "ask"
+            print(f"Depth imbalance: {imbalance_pct:+.1f}% ({side} heavy)")
+
+        print("\n--- Paper Strategy (Momentum) ---")
+        print(f"Signal: {strategy['signal'].upper()}")
+        print(f"Confidence: {strategy['confidence']*100:.0f}%")
+        if strategy["mid_price_change_1h"] is not None:
+            print(f"1h price change: {strategy['mid_price_change_1h']:+.2f}%")
+        print(f"Reasoning: {strategy['reasoning']}")
+
+        print("\n" + "=" * 60)
 
 
 def cmd_dataset_join(args: argparse.Namespace) -> None:
@@ -2324,6 +2398,64 @@ def main() -> None:
     )
     cf.set_defaults(func=cmd_collect_fills)
 
+    # Collect fills loop command
+    cfl = sub.add_parser(
+        "collect-fills-loop",
+        help="Run continuous fills collection loop with staleness alerts",
+    )
+    cfl.add_argument(
+        "--data-dir",
+        default="data",
+        help="Base data directory (default: data)",
+    )
+    cfl.add_argument(
+        "--fills-path",
+        default=None,
+        help="Output path for fills.jsonl (default: data/fills.jsonl)",
+    )
+    cfl.add_argument(
+        "--paper-fills-path",
+        default=None,
+        help="Path to paper trading fills.jsonl (default: data/paper_trading/fills.jsonl)",
+    )
+    cfl.add_argument(
+        "--interval-seconds",
+        type=float,
+        default=300.0,
+        help="Collection interval in seconds (default: 300 = 5 min)",
+    )
+    cfl.add_argument(
+        "--account",
+        action="store_true",
+        default=True,
+        help="Include real account fills (default: True)",
+    )
+    cfl.add_argument(
+        "--no-account",
+        action="store_false",
+        dest="account",
+        help="Skip account fills",
+    )
+    cfl.add_argument(
+        "--paper",
+        action="store_true",
+        default=True,
+        help="Include paper trading fills (default: True)",
+    )
+    cfl.add_argument(
+        "--no-paper",
+        action="store_false",
+        dest="paper",
+        help="Skip paper trading fills",
+    )
+    cfl.add_argument(
+        "--stale-alert-hours",
+        type=float,
+        default=6.0,
+        help="Hours before triggering stale alert (default: 6)",
+    )
+    cfl.set_defaults(func=cmd_collect_fills_loop)
+
     # PnL loop command
     pl = sub.add_parser(
         "pnl-loop",
@@ -2472,6 +2604,13 @@ def main() -> None:
         help="Exit with error code if sanity check fails",
     )
     psc.set_defaults(func=cmd_pnl_sanity_check)
+
+    # Hourly digest command
+    hd = sub.add_parser("hourly-digest", help="Generate hourly report from 15m snapshots")
+    hd.add_argument("--data-dir", default="data", help="Directory containing snapshot files")
+    hd.add_argument("--interval-seconds", type=float, default=5.0, help="Expected collection interval")
+    hd.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    hd.set_defaults(func=cmd_hourly_digest)
 
     ms = sub.add_parser("microstructure", help="Analyze market microstructure from snapshot")
     ms.add_argument(
