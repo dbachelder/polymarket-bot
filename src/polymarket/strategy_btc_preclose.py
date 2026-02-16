@@ -26,10 +26,10 @@ def _best_ask(book: dict) -> Decimal | None:
 def run_btc_preclose_paper(
     *,
     data_dir: Path,
-    window_seconds: int = 300,  # Increased from 120 to 300 (5 min window)
-    cheap_price: Decimal = Decimal("0.05"),  # Increased from 0.03 to 0.05
+    window_seconds: int = 900,  # Wider window to increase hit-rate (15 min)
+    cheap_price: Decimal = Decimal("0.10"),  # Loosen trigger to ensure daily paper fills
     size: Decimal = Decimal("1"),
-    starting_cash: Decimal = Decimal("0"),
+    starting_cash: Decimal = Decimal("1000"),
 ) -> dict[str, Any]:
     """Paper-trade cheap-side trigger on BTC 5m markets near close.
 
@@ -40,10 +40,10 @@ def run_btc_preclose_paper(
 
     Args:
         data_dir: Directory to store paper trading data
-        window_seconds: Time window before close to consider markets (default: 300 = 5 min)
-        cheap_price: Maximum price to consider "cheap" (default: 0.05)
+        window_seconds: Time window before close to consider markets (default: 900 = 15 min)
+        cheap_price: Maximum price to consider "cheap" (default: 0.10)
         size: Position size per trade
-        starting_cash: Starting cash balance
+        starting_cash: Starting cash balance (default: 1000)
 
     Returns:
         Dict with scan results including triggers and fills
@@ -169,10 +169,10 @@ def run_btc_preclose_paper(
 def run_btc_preclose_loop(
     *,
     data_dir: Path,
-    window_seconds: int = 300,
-    cheap_price: Decimal = Decimal("0.05"),
+    window_seconds: int = 900,
+    cheap_price: Decimal = Decimal("0.10"),
     size: Decimal = Decimal("1"),
-    starting_cash: Decimal = Decimal("0"),
+    starting_cash: Decimal = Decimal("1000"),
     loop_duration_minutes: int = 10,
     interval_seconds: int = 60,
 ) -> dict[str, Any]:
