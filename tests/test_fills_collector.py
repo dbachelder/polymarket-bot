@@ -374,3 +374,151 @@ class TestCollectFills:
         # Verify only new fill was added
         lines = fills_path.read_text().strip().split("\n")
         assert len(lines) == 2
+
+
+class TestCollectFillsWithOverlap:
+    """Test collect_fills with overlap_hours parameter."""
+
+    def test_uses_overlap_when_no_since_provided(self, tmp_path: Path) -> None:
+        """When no since is provided, query from last_seen_ts - overlap."""
+        fills_path = tmp_path / "fills.jsonl"
+        # Create an existing fill from 5 hours ago
+        last_ts = datetime.now(UTC) - timedelta(hours=5)
+        fills_path.write_text(
+            json.dumps({
+                "token_id": "t1",
+                "side": "buy",
+                "size": "100",
+                "price": "0.5",
+                "fee": "0.1",
+                "timestamp": last_ts.isoformat(),
+                "transaction_hash": "tx1",
+            })
+            + "\n"
+        )
+
+        # Collect with 2h overlap - should query since last_ts - 2h
+        result = collect_fills(
+            fills_path=fills_path,
+            include_account=False,
+            include_paper=False,  # Skip both to just test overlap logic
+            overlap_hours=2.0,
+            check_health=True,
+        )
+
+        # Verify the query used overlap
+        assert result["last_seen_ts"] == last_ts.isoformat()
+        expected_since = last_ts - timedelta(hours=2)
+        assert result["query_since"] == expected_since.isoformat()
+        assert result["overlap_hours"] == 2.0
+
+    def test_respects_explicit_since_parameter(self, tmp_path: Path) -> None:
+        """When since is provided explicitly, use it instead of overlap."""
+        fills_path = tmp_path / "fills.jsonl"
+        explicit_since = datetime.now(UTC) - timedelta(hours=10)
+
+        result = collect_fills(
+            fills_path=fills_path,
+            include_account=False,
+            include_paper=False,
+            since=explicit_since,
+            overlap_hours=2.0,
+        )
+
+        # When since is provided, last_seen_ts should be None and query_since should be since
+        assert result["last_seen_ts"] is None
+        assert result["query_since"] == explicit_since.isoformat()
+
+    def test_overlap_hours_in_result(self, tmp_path: Path) -> None:
+        """overlap_hours is included in the result."""
+        fills_path = tmp_path / "fills.jsonl"
+
+        result = collect_fills(
+            fills_path=fills_path,
+            include_account=False,
+            include_paper=False,
+            overlap_hours=3.5,
+        )
+
+        assert result["overlap_hours"] == 3.5
+
+
+class TestFillsAgeHealth:
+    """Test fills age health check functionality."""
+
+    def test_health_healthy_for_fresh_fills(self, tmp_path: Path) -> None:
+        """Fresh fills (< 6h) should be healthy."""
+        fills_path = tmp_path / "fills.jsonl"
+        # Fill from 1 hour ago
+        ts = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+        fills_path.write_text(
+            json.dumps({"token_id": "t1", "side": "buy", "size": "100", "price": "0.5", "fee": "0.1", "timestamp": ts, "transaction_hash": "tx1"})
+            + "\n"
+        )
+
+        from polymarket.fills_collector import _check_fills_age_health
+
+        result = _check_fills_age_health(fills_path, stale_hours=6)
+        assert result["healthy"] is True
+        assert result["hours_since_last_fill"] < 6
+        assert result["warning_emitted"] is False
+
+    def test_health_stale_for_old_fills(self, tmp_path: Path) -> None:
+        """Old fills (> 6h) should be stale."""
+        fills_path = tmp_path / "fills.jsonl"
+        # Fill from 10 hours ago
+        ts = (datetime.now(UTC) - timedelta(hours=10)).isoformat()
+        fills_path.write_text(
+            json.dumps({"token_id": "t1", "side": "buy", "size": "100", "price": "0.5", "fee": "0.1", "timestamp": ts, "transaction_hash": "tx1"})
+            + "\n"
+        )
+
+        from polymarket.fills_collector import _check_fills_age_health
+
+        result = _check_fills_age_health(fills_path, stale_hours=6)
+        assert result["healthy"] is False
+        assert result["hours_since_last_fill"] > 6
+        assert result["warning_emitted"] is True
+
+    def test_health_unhealthy_for_missing_file(self, tmp_path: Path) -> None:
+        """Missing file should be unhealthy."""
+        fills_path = tmp_path / "fills.jsonl"
+
+        from polymarket.fills_collector import _check_fills_age_health
+
+        result = _check_fills_age_health(fills_path, stale_hours=6)
+        assert result["healthy"] is False
+        assert result["last_fill_at"] is None
+
+    def test_health_in_collect_fills_result(self, tmp_path: Path) -> None:
+        """Health check result is included in collect_fills output."""
+        fills_path = tmp_path / "fills.jsonl"
+        ts = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+        fills_path.write_text(
+            json.dumps({"token_id": "t1", "side": "buy", "size": "100", "price": "0.5", "fee": "0.1", "timestamp": ts, "transaction_hash": "tx1"})
+            + "\n"
+        )
+
+        result = collect_fills(
+            fills_path=fills_path,
+            include_account=False,
+            include_paper=False,
+            check_health=True,
+            stale_hours=6,
+        )
+
+        assert "health" in result
+        assert result["health"]["healthy"] is True
+
+    def test_health_check_can_be_disabled(self, tmp_path: Path) -> None:
+        """Health check can be disabled with check_health=False."""
+        fills_path = tmp_path / "fills.jsonl"
+
+        result = collect_fills(
+            fills_path=fills_path,
+            include_account=False,
+            include_paper=False,
+            check_health=False,
+        )
+
+        assert "health" not in result
