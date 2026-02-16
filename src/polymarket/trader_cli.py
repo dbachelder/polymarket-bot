@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import json
 from decimal import Decimal
-from pathlib import Path
 
 
 def cmd_trader_discover(args: argparse.Namespace) -> None:
@@ -79,6 +78,8 @@ def cmd_trader_list(args: argparse.Namespace) -> None:
         traders = [t for t in traders if args.tag in t.tags]
 
     # Sort by score if available
+    from polymarket.trader_profiler import TraderScore
+
     score_map = {s.address: s for s in scores}
     traders.sort(key=lambda t: score_map.get(t.address.lower(), TraderScore(t.address, 0)).total_score, reverse=True)
 
@@ -302,7 +303,7 @@ def cmd_copy_status(args: argparse.Namespace) -> None:
 
 def cmd_copy_config(args: argparse.Namespace) -> None:
     """Show or update copy trading configuration."""
-    from polymarket.copy_trading import CopyTradeConfig, PaperCopyEngine
+    from polymarket.copy_trading import PaperCopyEngine
 
     engine = PaperCopyEngine(data_dir=args.data_dir)
     config = engine.config
@@ -341,8 +342,6 @@ def cmd_copy_config(args: argparse.Namespace) -> None:
 # Need to import this for type checking
 def add_trader_commands(subparsers) -> None:
     """Add trader profiling commands to CLI."""
-    from polymarket.trader_profiler import TraderScore
-
     # Main trader command
     trader = subparsers.add_parser("trader", help="Trader profiling and discovery")
     trader_sub = trader.add_subparsers(dest="trader_cmd", required=True)
