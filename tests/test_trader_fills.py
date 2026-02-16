@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from decimal import Decimal
 from pathlib import Path
-
-import pytest
 
 from polymarket.trader_fills import (
     TraderAccounting,
@@ -272,7 +269,7 @@ class TestTraderFillTracker:
 
     def test_init_creates_directories(self, tmp_path: Path) -> None:
         """Test initialization creates directories."""
-        tracker = TraderFillTracker(data_dir=tmp_path)
+        _tracker = TraderFillTracker(data_dir=tmp_path)
 
         assert tmp_path.exists()
         assert (tmp_path / "fills").exists()
@@ -347,7 +344,7 @@ class TestTraderFillTracker:
         ))
 
         # Record NAV
-        snapshot = tracker.record_nav_snapshot(address, {"token123": Decimal("0.60")})
+        _snapshot = tracker.record_nav_snapshot(address, {"token123": Decimal("0.60")})
 
         # Load history
         history = tracker.get_nav_history(address)
