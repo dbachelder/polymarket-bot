@@ -703,3 +703,254 @@ class TestRunMentionScan:
         assert result["summary"]["buy_yes_count"] >= 1
         assert result["summary"]["buy_no_count"] >= 1
         assert result["summary"]["no_trade_count"] >= 1
+
+
+class TestTrumpWordFrequencyAnalyzer:
+    """Tests for TrumpWordFrequencyAnalyzer class."""
+
+    def test_get_base_rate_known_word(self) -> None:
+        from polymarket.strategy_mention import TrumpWordFrequencyAnalyzer
+
+        analyzer = TrumpWordFrequencyAnalyzer()
+        rate = analyzer.get_base_rate("biden")
+        assert rate == 8.5  # From TRUMP_SPEECH_WORD_FREQUENCY
+
+    def test_get_base_rate_unknown_word(self) -> None:
+        from polymarket.strategy_mention import TrumpWordFrequencyAnalyzer
+
+        analyzer = TrumpWordFrequencyAnalyzer()
+        rate = analyzer.get_base_rate("xyzunknown")
+        assert rate == 0.1  # Default for unknown words
+
+    def test_estimate_mention_probability(self) -> None:
+        from polymarket.strategy_mention import TrumpWordFrequencyAnalyzer
+
+        analyzer = TrumpWordFrequencyAnalyzer()
+        # Use a word with moderate frequency (tariffs = 4.2 per 1k)
+        prob = analyzer.estimate_mention_probability("tariffs", speech_context="speech")
+
+        # Should have moderate probability
+        assert 0.05 < prob <= 0.95
+        assert isinstance(prob, float)
+
+    def test_context_modifiers_affect_probability(self) -> None:
+        from polymarket.strategy_mention import TrumpWordFrequencyAnalyzer
+
+        analyzer = TrumpWordFrequencyAnalyzer()
+
+        # Use words with lower frequency to avoid capping at 0.95
+        # nato has 2.8 per 1k words, which should give ~75% probability for 5000 words
+        # with modifiers 1.5 vs 0.9, we should see a difference
+        prob_rally = analyzer.estimate_mention_probability("nato", speech_context="campaign_rally")
+        prob_statement = analyzer.estimate_mention_probability("nato", speech_context="statement")
+
+        # Rally context has higher modifier (1.5) than statement (0.9)
+        assert prob_rally > prob_statement
+
+    def test_compare_to_market_buy_signal(self) -> None:
+        from polymarket.strategy_mention import TrumpWordFrequencyAnalyzer
+
+        analyzer = TrumpWordFrequencyAnalyzer()
+        result = analyzer.compare_to_market(
+            word="biden",
+            market_yes_price=0.05,  # Market thinks 5% chance
+            speech_context="campaign_rally",
+        )
+
+        assert result["word"] == "biden"
+        assert result["market_probability"] == 0.05
+        assert result["edge"] > 0  # We think it's more likely than market
+        assert result["signal"] in ["buy_yes", "strong_buy_yes"]
+
+    def test_compare_to_market_sell_signal(self) -> None:
+        from polymarket.strategy_mention import TrumpWordFrequencyAnalyzer
+
+        analyzer = TrumpWordFrequencyAnalyzer()
+        result = analyzer.compare_to_market(
+            word="xyzunknown",  # Very unlikely word
+            market_yes_price=0.80,  # Market thinks 80% chance
+            speech_context="speech",
+        )
+
+        assert result["edge"] < 0  # We think it's less likely than market
+        assert result["signal"] in ["buy_no", "strong_buy_no"]
+
+    def test_estimate_with_context(self) -> None:
+        from polymarket.strategy_mention import TrumpWordFrequencyAnalyzer
+
+        analyzer = TrumpWordFrequencyAnalyzer()
+        result = analyzer.estimate_with_context(
+            word="biden",
+            speech_context="campaign_rally",
+            known_topics=["immigration"],
+        )
+
+        assert result["word"] == "biden"
+        assert result["speech_context"] == "campaign_rally"
+        assert result["base_rate_per_1k"] == 8.5
+        assert result["context_modifier"] == 1.5
+        assert "base_probability" in result
+        assert "adjusted_probability" in result
+        assert "confidence" in result
+        assert "reasoning" in result
+
+    def test_topic_boost_for_related_topics(self) -> None:
+        from polymarket.strategy_mention import TrumpWordFrequencyAnalyzer
+
+        analyzer = TrumpWordFrequencyAnalyzer()
+        # "border" is in the immigration topic cluster with "immigration"
+        boost = analyzer.get_topic_boost("border", known_topics_in_speech=["immigration"])
+        assert boost == 1.5
+
+    def test_no_topic_boost_for_unrelated(self) -> None:
+        from polymarket.strategy_mention import TrumpWordFrequencyAnalyzer
+
+        analyzer = TrumpWordFrequencyAnalyzer()
+        boost = analyzer.get_topic_boost("biden", known_topics_in_speech=["economy"])
+        assert boost == 1.0
+
+
+class TestTrumpSpeechContextExtraction:
+    """Tests for extract_trump_speech_context function."""
+
+    def test_extract_rally_context(self) -> None:
+        from polymarket.strategy_mention import extract_trump_speech_context
+
+        question = "Will Trump mention Biden at his campaign rally?"
+        assert extract_trump_speech_context(question) == "campaign_rally"
+
+    def test_extract_debate_context(self) -> None:
+        from polymarket.strategy_mention import extract_trump_speech_context
+
+        question = "Will Trump mention tariffs during the debate?"
+        assert extract_trump_speech_context(question) == "debate"
+
+    def test_extract_interview_context(self) -> None:
+        from polymarket.strategy_mention import extract_trump_speech_context
+
+        question = "Will Trump mention China in his interview?"
+        assert extract_trump_speech_context(question) == "interview"
+
+    def test_default_speech_context(self) -> None:
+        from polymarket.strategy_mention import extract_trump_speech_context
+
+        question = "Will Trump mention Biden in his speech?"
+        assert extract_trump_speech_context(question) == "speech"
+
+
+class TestIsTrumpMentionMarket:
+    """Tests for is_trump_mention_market function."""
+
+    def test_detects_trump_mention_market(self) -> None:
+        from polymarket.strategy_mention import is_trump_mention_market
+
+        assert is_trump_mention_market("Will Trump mention Biden in his speech?")
+        assert is_trump_mention_market("Will Donald Trump mention tariffs?")
+
+    def test_rejects_non_trump_market(self) -> None:
+        from polymarket.strategy_mention import is_trump_mention_market
+
+        assert not is_trump_mention_market("Will Biden mention Trump in his speech?")
+
+    def test_rejects_non_mention_market(self) -> None:
+        from polymarket.strategy_mention import is_trump_mention_market
+
+        assert not is_trump_mention_market("Will Trump win the election?")
+
+
+class TestTrumpWordFrequencySignals:
+    """Tests for generate_trump_word_frequency_signals function."""
+
+    def test_generates_trump_specific_signals(self) -> None:
+        from polymarket.strategy_mention import (
+            MentionMarket,
+            generate_trump_word_frequency_signals,
+        )
+
+        markets = [
+            MentionMarket(
+                market_id="test1",
+                token_id_yes="yes1",
+                token_id_no="no1",
+                question="Will Trump mention Biden in his speech?",
+                mention_target="Biden",
+                mention_context="speech",
+                current_yes_price=0.80,  # Market overpricing
+                current_no_price=0.20,
+            ),
+            MentionMarket(
+                market_id="test2",
+                token_id_yes="yes2",
+                token_id_no="no2",
+                question="Will Trump mention tariffs at his rally?",
+                mention_target="Tariffs",
+                mention_context="speech",
+                current_yes_price=0.10,  # Market underpricing
+                current_no_price=0.90,
+            ),
+        ]
+
+        signals = generate_trump_word_frequency_signals(markets)
+
+        # Should generate signals for both Trump markets
+        assert len(signals) == 2
+
+        # Check that reasoning includes word-frequency info
+        for signal in signals:
+            assert "Trump word-freq" in signal.reasoning or "word-freq" in signal.reasoning
+
+    def test_skips_non_trump_markets(self) -> None:
+        from polymarket.strategy_mention import (
+            MentionMarket,
+            generate_trump_word_frequency_signals,
+        )
+
+        markets = [
+            MentionMarket(
+                market_id="test1",
+                token_id_yes="yes1",
+                token_id_no="no1",
+                question="Will Biden mention Trump in his speech?",  # Biden speaking
+                mention_target="Trump",
+                mention_context="speech",
+                current_yes_price=0.50,
+                current_no_price=0.50,
+            ),
+        ]
+
+        signals = generate_trump_word_frequency_signals(markets)
+        assert len(signals) == 0  # No Trump markets = no signals
+
+    def test_trump_signals_sorted_by_ev(self) -> None:
+        from polymarket.strategy_mention import (
+            MentionMarket,
+            generate_trump_word_frequency_signals,
+        )
+
+        markets = [
+            MentionMarket(
+                market_id="test1",
+                token_id_yes="yes1",
+                token_id_no="no1",
+                question="Will Trump mention Biden?",
+                mention_target="Biden",
+                current_yes_price=0.20,
+                current_no_price=0.80,
+            ),
+            MentionMarket(
+                market_id="test2",
+                token_id_yes="yes2",
+                token_id_no="no2",
+                question="Will Trump mention xyzunknown?",
+                mention_target="Xyzunknown",
+                current_yes_price=0.90,  # Very overpriced
+                current_no_price=0.10,
+            ),
+        ]
+
+        signals = generate_trump_word_frequency_signals(markets)
+
+        # Should be sorted by expected value descending
+        if len(signals) >= 2:
+            evs = [s.expected_value for s in signals]
+            assert evs == sorted(evs, reverse=True)
