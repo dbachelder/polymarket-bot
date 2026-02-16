@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from decimal import Decimal
 from pathlib import Path
-
-import pytest
 
 from polymarket.trader_profiler import TraderProfile, TraderProfiler, TraderScore
 
@@ -158,7 +155,7 @@ class TestTraderProfiler:
         """Test initialization creates data directories."""
         data_dir = tmp_path / "test_profiles"
 
-        profiler = TraderProfiler(data_dir=data_dir)
+        _profiler = TraderProfiler(data_dir=data_dir)
 
         assert data_dir.exists()
         assert (data_dir / "fills").exists()

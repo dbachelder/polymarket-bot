@@ -11,14 +11,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from .pnl import Fill as PnlFill
 from .trader_fills import TraderFill, TraderFillTracker
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
 
 # Constants
 DEFAULT_DATA_DIR = Path("data/copy_trading")
