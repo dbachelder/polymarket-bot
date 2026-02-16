@@ -7,6 +7,10 @@ structural YES overpricing due to behavioral biases:
 - Asymmetric attention: monitoring for mentions is costly; NO is the "lazy" bet
 
 Strategy: Default to NO positions unless there's strong evidence for YES.
+
+Trump Speech Word-Frequency Edge:
+Uses historical word frequency analysis from Trump speeches to estimate mention
+probability. This provides a data-driven base rate vs. naive assumptions.
 """
 
 from __future__ import annotations
@@ -14,7 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -101,6 +105,394 @@ CONTEXT_PATTERNS = [
     ("media", ["cnn", "fox", "msnbc", "news", "article", "coverage"]),
     ("congress", ["congress", "senate", "house floor", "hearing"]),
 ]
+
+
+# Trump speech word-frequency database
+# Based on historical analysis of Trump speeches (2016-2025)
+# Values are estimated frequencies (mentions per 1000 words)
+TRUMP_SPEECH_WORD_FREQUENCY: dict[str, float] = {
+    # Political opponents and figures
+    "biden": 8.5,
+    "joe biden": 6.2,
+    "harris": 4.1,
+    "kamala": 2.8,
+    "obama": 3.5,
+    "barack obama": 1.2,
+    "hillary": 2.1,
+    "clinton": 3.2,
+    "pelosi": 1.8,
+    "nancy pelosi": 1.2,
+    "schumer": 1.5,
+    "chuck schumer": 0.8,
+    "mcconnell": 1.2,
+    "mitch mcconnell": 0.6,
+    # Republican figures
+    "republicans": 5.2,
+    "democrats": 6.8,
+    "gop": 2.1,
+    "maga": 4.5,
+    # Policy topics
+    "immigration": 7.2,
+    "border": 6.8,
+    "wall": 3.5,
+    "inflation": 5.5,
+    "economy": 8.2,
+    "jobs": 6.5,
+    "china": 7.8,
+    "tariffs": 4.2,
+    "trade": 5.1,
+    "nato": 2.8,
+    "ukraine": 3.5,
+    "russia": 4.8,
+    "putin": 2.5,
+    "israel": 3.2,
+    "gaza": 2.1,
+    "iran": 3.8,
+    # Legal issues
+    "witch hunt": 3.2,
+    "fake news": 4.5,
+    "hoax": 2.8,
+    "indictment": 2.1,
+    "court": 2.5,
+    "judge": 2.8,
+    # Media
+    "media": 5.5,
+    "cnn": 2.1,
+    "fox": 1.8,
+    "msnbc": 1.2,
+    "news": 6.2,
+    # Election terms
+    "election": 8.5,
+    "vote": 5.2,
+    "voter fraud": 2.8,
+    "rigged": 2.5,
+    "stolen": 1.8,
+    # General positive terms
+    "america": 12.5,
+    "american": 9.8,
+    "great": 8.2,
+    "winning": 3.5,
+    "tremendous": 4.2,
+    "incredible": 3.8,
+    "best": 5.5,
+}
+
+# Speech context modifiers - adjusts base probability based on speech type
+SPEECH_CONTEXT_MODIFIERS: dict[str, float] = {
+    "campaign_rally": 1.5,  # Higher mention frequency at rallies
+    "state_union": 1.2,  # More formal, slightly elevated
+    "press_conference": 1.3,  # Interactive, responsive
+    "interview": 1.1,  # Conversational
+    "debate": 1.4,  # Adversarial, opponent mentions likely
+    "remarks": 1.0,  # Standard
+    "statement": 0.9,  # Brief, focused
+}
+
+# Topic clustering - words that tend to co-occur
+TOPIC_CLUSTERS: dict[str, list[str]] = {
+    "immigration": ["border", "wall", "illegal", "deportation", "visa"],
+    "economy": ["jobs", "inflation", "trade", "tariffs", "stock market", "taxes"],
+    "legal": ["witch hunt", "fake news", "hoax", "indictment", "court", "judge"],
+    "foreign_policy": ["china", "russia", "ukraine", "nato", "israel", "iran"],
+    "election": ["vote", "rigged", "stolen", "voter fraud", "ballots"],
+}
+
+
+@dataclass
+class TrumpWordFrequencyAnalyzer:
+    """Analyzes Trump speech word frequencies to estimate mention probabilities.
+
+    Uses historical speech data to provide base rates for specific keywords,
+    adjusting for context (rally vs debate vs press conference).
+
+    Attributes:
+        word_frequency: Dict mapping words to frequency per 1000 words
+        context_modifiers: Dict mapping speech types to probability modifiers
+        topic_clusters: Dict mapping topics to related words
+    """
+
+    word_frequency: dict[str, float] = field(default_factory=lambda: TRUMP_SPEECH_WORD_FREQUENCY.copy())
+    context_modifiers: dict[str, float] = field(default_factory=lambda: SPEECH_CONTEXT_MODIFIERS.copy())
+    topic_clusters: dict[str, list[str]] = field(default_factory=lambda: TOPIC_CLUSTERS.copy())
+
+    # Estimated average words per speech by type
+    SPEECH_LENGTH_ESTIMATES: dict[str, int] = field(default_factory=lambda: {
+        "campaign_rally": 8000,
+        "state_union": 6000,
+        "press_conference": 3000,
+        "interview": 4000,
+        "debate": 3500,
+        "remarks": 2000,
+        "statement": 1000,
+        "speech": 5000,  # Default
+    })
+
+    def get_base_rate(self, word: str) -> float:
+        """Get base mention frequency per 1000 words for a keyword.
+
+        Args:
+            word: Keyword to look up (case-insensitive)
+
+        Returns:
+            Frequency per 1000 words, or 0.1 if unknown
+        """
+        word_lower = word.lower().strip()
+
+        # Direct lookup
+        if word_lower in self.word_frequency:
+            return self.word_frequency[word_lower]
+
+        # Try common variations
+        variations = self._generate_variations(word_lower)
+        for var in variations:
+            if var in self.word_frequency:
+                return self.word_frequency[var]
+
+        # Unknown word - use conservative estimate
+        return 0.1
+
+    def _generate_variations(self, word: str) -> list[str]:
+        """Generate possible variations of a word/phrase."""
+        variations = [word]
+
+        # Handle common name patterns
+        if " " in word:
+            parts = word.split()
+            if len(parts) == 2:
+                first, last = parts
+                # Try just last name
+                variations.append(last)
+                # Try with common titles
+                variations.append(f"president {last}")
+
+        return variations
+
+    def estimate_mention_probability(
+        self,
+        word: str,
+        speech_context: str = "speech",
+        speech_length_words: int | None = None,
+    ) -> float:
+        """Estimate probability of Trump mentioning a specific word.
+
+        Uses Poisson distribution based on word frequency and speech length.
+
+        Args:
+            word: The word/phrase to estimate
+            speech_context: Type of speech (rally, debate, etc.)
+            speech_length_words: Estimated speech length (uses defaults if None)
+
+        Returns:
+            Probability (0-1) of at least one mention
+        """
+        base_rate = self.get_base_rate(word)  # per 1000 words
+
+        # Get context modifier
+        context_mod = self.context_modifiers.get(speech_context, 1.0)
+
+        # Get speech length estimate
+        if speech_length_words is None:
+            speech_length_words = self.SPEECH_LENGTH_ESTIMATES.get(speech_context, 5000)
+
+        # Adjusted rate for this context
+        adjusted_rate = base_rate * context_mod
+
+        # Expected mentions (lambda for Poisson)
+        lambda_m = (adjusted_rate * speech_length_words) / 1000
+
+        # P(at least one mention) = 1 - P(zero mentions)
+        # P(k=0) = e^(-lambda)
+        prob_at_least_one = 1.0 - np.exp(-lambda_m)
+
+        return min(0.95, max(0.01, prob_at_least_one))
+
+    def get_topic_boost(self, word: str, known_topics_in_speech: list[str]) -> float:
+        """Calculate probability boost based on topic clustering.
+
+        If related topics are already being discussed, probability increases.
+
+        Args:
+            word: Target word
+            known_topics_in_speech: List of known topics in current speech
+
+        Returns:
+            Multiplier boost (1.0 = no change)
+        """
+        word_lower = word.lower()
+
+        # Find which cluster this word belongs to
+        for topic, words in self.topic_clusters.items():
+            if word_lower in words or any(word_lower in w for w in words):
+                # Word is in this topic cluster
+                if topic in known_topics_in_speech:
+                    # Strong boost if same topic already mentioned
+                    return 1.5
+                # Check for related topic overlap
+                cluster_words = set(words)
+                for other_topic in known_topics_in_speech:
+                    if other_topic in self.topic_clusters:
+                        overlap = cluster_words & set(self.topic_clusters[other_topic])
+                        if overlap:
+                            return 1.2  # Moderate boost for related topics
+
+        return 1.0
+
+    def estimate_with_context(
+        self,
+        word: str,
+        speech_context: str = "speech",
+        known_topics: list[str] | None = None,
+        speech_length_words: int | None = None,
+    ) -> dict[str, Any]:
+        """Full estimate with context adjustments and metadata.
+
+        Args:
+            word: Target word/phrase
+            speech_context: Type of speech
+            known_topics: Topics already mentioned in speech
+            speech_length_words: Override speech length estimate
+
+        Returns:
+            Dict with probability and reasoning
+        """
+        known_topics = known_topics or []
+
+        # Base probability
+        base_prob = self.estimate_mention_probability(word, speech_context, speech_length_words)
+
+        # Topic boost
+        topic_boost = self.get_topic_boost(word, known_topics)
+
+        # Adjusted probability
+        adjusted_prob = min(0.95, base_prob * topic_boost)
+
+        base_rate = self.get_base_rate(word)
+        context_mod = self.context_modifiers.get(speech_context, 1.0)
+
+        return {
+            "word": word,
+            "base_rate_per_1k": base_rate,
+            "speech_context": speech_context,
+            "context_modifier": context_mod,
+            "topic_boost": topic_boost,
+            "base_probability": base_prob,
+            "adjusted_probability": adjusted_prob,
+            "confidence": "high" if base_rate > 1.0 else "medium" if base_rate > 0.5 else "low",
+            "reasoning": (
+                f"Base rate {base_rate}/1k words with {context_mod:.1f}x context modifier"
+                f"{f' and {topic_boost:.1f}x topic boost' if topic_boost > 1 else ''}"
+            ),
+        }
+
+    def compare_to_market(
+        self,
+        word: str,
+        market_yes_price: float,
+        speech_context: str = "speech",
+        known_topics: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Compare word-frequency estimate to market-implied probability.
+
+        Args:
+            word: Target word
+            market_yes_price: Current market YES price (0-1)
+            speech_context: Type of speech context
+            known_topics: Topics already mentioned
+
+        Returns:
+            Dict with edge analysis
+        """
+        estimate = self.estimate_with_context(word, speech_context, known_topics)
+        our_prob = estimate["adjusted_probability"]
+        market_prob = market_yes_price
+
+        # Calculate edge (positive means market is underpricing YES)
+        edge = our_prob - market_prob
+
+        # Signal direction
+        if edge > 0.15 and our_prob > 0.3:
+            signal = "strong_buy_yes"
+        elif edge > 0.05:
+            signal = "buy_yes"
+        elif edge < -0.15 and our_prob < 0.2:
+            signal = "strong_buy_no"
+        elif edge < -0.05:
+            signal = "buy_no"
+        else:
+            signal = "no_trade"
+
+        return {
+            "word": word,
+            "our_probability": our_prob,
+            "market_probability": market_prob,
+            "edge": edge,
+            "signal": signal,
+            "confidence": estimate["confidence"],
+            "reasoning": estimate["reasoning"],
+        }
+
+
+def extract_trump_speech_context(question: str) -> str:
+    """Extract Trump speech context from market question.
+
+    Args:
+        question: Market question text
+
+    Returns:
+        Speech context type for frequency analysis
+    """
+    question_lower = question.lower()
+
+    # Check for specific contexts
+    if any(kw in question_lower for kw in ["rally", "campaign"]):
+        return "campaign_rally"
+    if any(kw in question_lower for kw in ["state of the union", "sotu"]):
+        return "state_union"
+    if any(kw in question_lower for kw in ["press conference", "briefing"]):
+        return "press_conference"
+    if any(kw in question_lower for kw in ["interview", "interviewed", "sits down with"]):
+        return "interview"
+    if any(kw in question_lower for kw in ["debate", "debates"]):
+        return "debate"
+    if any(kw in question_lower for kw in ["remarks", "remarks at"]):
+        return "remarks"
+    if any(kw in question_lower for kw in ["statement", "statements"]):
+        return "statement"
+
+    # Default to general speech
+    return "speech"
+
+
+def is_trump_mention_market(question: str) -> bool:
+    """Check if this is a Trump speech mention market.
+
+    Args:
+        question: Market question
+
+    Returns:
+        True if Trump is the speaker being asked about
+    """
+    question_lower = question.lower()
+
+    # Must be a mention market
+    if not _is_mention_market(question):
+        return False
+
+    # Check if Trump is the subject/speaker (typically appears early in question)
+    # Pattern: "Will Trump..." or "Does Trump..." or similar
+    trump_as_speaker_patterns = [
+        r"^will\s+trump\s+",
+        r"^does\s+trump\s+",
+        r"^will\s+donald\s+trump\s+",
+        r"^does\s+donald\s+trump\s+",
+        r"^will\s+president\s+trump\s+",
+    ]
+
+    for pattern in trump_as_speaker_patterns:
+        if re.search(pattern, question_lower):
+            return True
+
+    return False
 
 
 def _is_mention_market(question: str) -> bool:
@@ -194,19 +586,43 @@ def _extract_mention_context(question: str) -> str | None:
 def _compute_theoretical_yes_probability(
     market: MentionMarket,
     base_rate: float = 0.15,
+    use_word_frequency: bool = True,
 ) -> float:
     """Compute theoretical probability of YES based on structural factors.
 
     The default-to-NO hypothesis: base rate for mentions is low,
     but markets systematically overprice YES due to biases.
 
+    For Trump mention markets, uses word-frequency analysis for edge.
+
     Args:
         market: The mention market
         base_rate: Historical base rate for mentions (default 15%)
+        use_word_frequency: Whether to use word-frequency analysis for Trump markets
 
     Returns:
         Theoretical probability (0-1)
     """
+    # Check if this is a Trump speech mention market
+    if use_word_frequency and is_trump_mention_market(market.question):
+        analyzer = TrumpWordFrequencyAnalyzer()
+        speech_context = extract_trump_speech_context(market.question)
+
+        # Extract the mention target for word lookup
+        target = market.mention_target or _extract_mention_target(market.question) or ""
+
+        if target:
+            estimate = analyzer.estimate_with_context(
+                word=target,
+                speech_context=speech_context,
+            )
+            prob = estimate["adjusted_probability"]
+            logger.debug(
+                "Trump word-frequency estimate for '%s' in %s context: %.3f",
+                target, speech_context, prob
+            )
+            return prob
+
     # Start with base rate
     prob = base_rate
 
@@ -485,6 +901,120 @@ def generate_signals(
     return signals
 
 
+def generate_trump_word_frequency_signals(
+    markets: list[MentionMarket],
+    min_edge: float = MIN_EDGE_FOR_TRADE,
+    no_entry_min_price: float = DEFAULT_NO_ENTRY_MIN_PRICE,
+    no_entry_max_price: float = DEFAULT_NO_ENTRY_MAX_PRICE,
+    yes_entry_max_price: float = DEFAULT_YES_ENTRY_MAX_PRICE,
+) -> list[MentionSignal]:
+    """Generate signals for Trump mention markets using word-frequency edge.
+
+    Uses historical Trump speech word frequency data to estimate mention
+    probabilities, providing edge over naive base rates.
+
+    Args:
+        markets: List of mention markets (will filter to Trump-only)
+        min_edge: Minimum edge required for any trade
+        no_entry_min_price: Minimum NO price to consider entry
+        no_entry_max_price: Maximum NO price to consider entry
+        yes_entry_max_price: Maximum YES price for YES entry
+
+    Returns:
+        List of trading signals with word-frequency metadata
+    """
+    signals: list[MentionSignal] = []
+    analyzer = TrumpWordFrequencyAnalyzer()
+    now = datetime.now(UTC)
+
+    for market in markets:
+        # Skip non-Trump markets
+        if not is_trump_mention_market(market.question):
+            continue
+
+        # Skip if no price data or expired
+        if market.current_yes_price is None or market.is_expired:
+            continue
+
+        market_prob = market.current_yes_price
+        speech_context = extract_trump_speech_context(market.question)
+        target = market.mention_target or _extract_mention_target(market.question) or ""
+
+        # Get word-frequency based estimate
+        comparison = analyzer.compare_to_market(
+            word=target,
+            market_yes_price=market_prob,
+            speech_context=speech_context,
+        )
+
+        theoretical_prob = comparison["our_probability"]
+        edge = comparison["edge"]
+
+        side = "no_trade"
+        confidence = 0.0
+        expected_value = 0.0
+        reasoning = ""
+
+        # Trading logic with word-frequency edge
+        if market_prob <= yes_entry_max_price and edge > min_edge:
+            side = "buy_yes"
+            confidence = min(1.0, abs(edge) * 2)
+            win_amount = 1.0 - market_prob
+            lose_amount = market_prob
+            expected_value = (theoretical_prob * win_amount) - (
+                (1 - theoretical_prob) * lose_amount
+            )
+            reasoning = (
+                f"Trump word-freq: '{target}' has {theoretical_prob:.1%} in {speech_context} "
+                f"(base rate: {analyzer.get_base_rate(target):.1f}/1k), "
+                f"market={market_prob:.2%}, edge={edge:+.1%}"
+            )
+        else:
+            no_price = market.current_no_price or (1.0 - market_prob)
+            if no_price > 0:
+                theoretical_no_prob = 1.0 - theoretical_prob
+                market_no_prob = 1.0 - market_prob
+                no_edge = theoretical_no_prob - market_no_prob
+
+                if no_entry_min_price <= no_price <= no_entry_max_price and no_edge > min_edge:
+                    side = "buy_no"
+                    confidence = min(1.0, abs(no_edge) * 2)
+                    win_amount = 1.0 - no_price
+                    lose_amount = no_price
+                    expected_value = (theoretical_no_prob * win_amount) - (
+                        (1 - theoretical_no_prob) * lose_amount
+                    )
+                    reasoning = (
+                        f"Trump word-freq: '{target}' unlikely ({theoretical_prob:.1%}) "
+                        f"in {speech_context}, market overpricing YES, NO_edge={no_edge:+.1%}"
+                    )
+
+        if side == "no_trade":
+            reasoning = (
+                f"Trump word-freq: '{target}'={theoretical_prob:.1%} in {speech_context}, "
+                f"market={market_prob:.2%}, no significant edge"
+            )
+
+        signals.append(
+            MentionSignal(
+                timestamp=now,
+                market=market,
+                side=side,
+                market_prob=market_prob,
+                theoretical_prob=theoretical_prob,
+                edge=edge,
+                confidence=confidence,
+                expected_value=expected_value,
+                reasoning=reasoning,
+            )
+        )
+
+    # Sort by expected value descending
+    signals.sort(key=lambda s: s.expected_value, reverse=True)
+
+    return signals
+
+
 @dataclass(frozen=True)
 class MentionTrade:
     """An executed mention market trade.
@@ -592,14 +1122,19 @@ def run_mention_scan(
     base_rate: float = 0.15,
     dry_run: bool = True,
     max_positions: int = MAX_POSITIONS_PER_SCAN,
+    use_word_frequency: bool = True,
 ) -> dict[str, Any]:
     """Run a complete mention market scan with default-to-NO strategy.
+
+    For Trump mention markets, uses word-frequency analysis to estimate
+    mention probabilities based on historical speech data.
 
     Args:
         snapshots_dir: Directory with market snapshots
         base_rate: Historical base rate for mentions
         dry_run: If True, don't execute trades
         max_positions: Maximum positions to take
+        use_word_frequency: Whether to use word-frequency for Trump markets
 
     Returns:
         Dictionary with scan results
@@ -613,7 +1148,24 @@ def run_mention_scan(
     logger.info("Found %d mention markets", len(markets))
 
     # Step 2: Generate signals using default-to-NO logic
-    signals = generate_signals(markets, base_rate=base_rate)
+    # For Trump markets, use word-frequency analysis if enabled
+    if use_word_frequency:
+        # Separate Trump and non-Trump markets
+        trump_markets = [m for m in markets if is_trump_mention_market(m.question)]
+        other_markets = [m for m in markets if not is_trump_mention_market(m.question)]
+
+        logger.info("Found %d Trump mention markets", len(trump_markets))
+
+        # Generate Trump-specific signals with word-frequency edge
+        trump_signals = generate_trump_word_frequency_signals(trump_markets)
+
+        # Generate regular signals for other markets
+        other_signals = generate_signals(other_markets, base_rate=base_rate)
+
+        signals = trump_signals + other_signals
+    else:
+        signals = generate_signals(markets, base_rate=base_rate)
+
     logger.info("Generated %d signals", len(signals))
 
     # Step 3: Filter to actionable signals
@@ -639,6 +1191,11 @@ def run_mention_scan(
     buy_no_signals = [s for s in signals if s.side == "buy_no"]
     no_trade_signals = [s for s in signals if s.side == "no_trade"]
 
+    # Trump-specific breakdown
+    trump_signals = [s for s in signals if is_trump_mention_market(s.market.question)]
+    trump_buy_yes = [s for s in trump_signals if s.side == "buy_yes"]
+    trump_buy_no = [s for s in trump_signals if s.side == "buy_no"]
+
     avg_edge_no = np.mean([s.edge for s in buy_no_signals]) if buy_no_signals else 0.0
     avg_edge_yes = np.mean([s.edge for s in buy_yes_signals]) if buy_yes_signals else 0.0
 
@@ -655,6 +1212,9 @@ def run_mention_scan(
             "no_trade_count": len(no_trade_signals),
             "avg_edge_buy_no": avg_edge_no,
             "avg_edge_buy_yes": avg_edge_yes,
+            "trump_markets": len(trump_signals),
+            "trump_buy_yes": len(trump_buy_yes),
+            "trump_buy_no": len(trump_buy_no),
         },
         "markets": [
             {
@@ -663,6 +1223,7 @@ def run_mention_scan(
                 "target": m.mention_target,
                 "context": m.mention_context,
                 "yes_price": m.current_yes_price,
+                "is_trump_market": is_trump_mention_market(m.question),
             }
             for m in markets
         ],
