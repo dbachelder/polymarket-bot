@@ -334,7 +334,6 @@ def find_weather_markets(snapshots_dir: Path | None = None) -> list[WeatherMarke
         
         yes_bid = _best_bid(yes_book)
         yes_ask = _best_ask(yes_book)
-        no_bid = _best_bid(no_book)
         no_ask = _best_ask(no_book)
         
         # Calculate mid price
@@ -556,7 +555,7 @@ def record_weather_fill(
 
     # Record fill
     try:
-        fill = engine.record_fill(
+        engine.record_fill(
             token_id=token_id,
             side=side,
             size=position_size,
