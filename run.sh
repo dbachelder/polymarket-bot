@@ -58,6 +58,10 @@ case "${1:-}" in
         shift
         $PYTHON -m polymarket.cli pnl-health "$@"
         ;;
+    pnl-sanity-check)
+        shift
+        $PYTHON -m polymarket.cli pnl-sanity-check "$@"
+        ;;
     watchdog)
         shift
         $PYTHON -m polymarket.cli watchdog "$@"
@@ -122,6 +126,7 @@ case "${1:-}" in
         echo "  collect-fills      Collect fills from paper + real account"
         echo "  pnl-loop           Run PnL collection/verification loop"
         echo "  pnl-health         Check fills and PnL data health"
+        echo "  pnl-sanity-check   Run NAV/PnL sanity check (detect impossible jumps)"
         echo ""
         echo "Additional commands:"
         echo "  collect-5m         Snapshot 5M predictions + CLOB orderbooks"

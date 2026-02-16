@@ -105,11 +105,65 @@ def cmd_collect_5m(args: argparse.Namespace) -> None:
         print(str(out))
 
 
+def cmd_collect_weather(args: argparse.Namespace) -> None:
+    from .collector_weather import collect_weather_snapshot
+
+    out = collect_weather_snapshot(Path(args.out))
+    print(str(out))
+
+
 def cmd_collect_15m(args: argparse.Namespace) -> None:
     from .collector import collect_15m_snapshot
 
     out = collect_15m_snapshot(Path(args.out))
     print(str(out))
+
+
+def cmd_collect_top(args: argparse.Namespace) -> None:
+    from .collector_top import collect_top_snapshot
+
+    out = collect_top_snapshot(
+        Path(args.out),
+        limit=int(args.limit),
+        offset=int(args.offset),
+        search=args.search,
+    )
+    print(str(out))
+
+
+def cmd_btc_preclose_paper(args: argparse.Namespace) -> None:
+    from decimal import Decimal
+    from pathlib import Path
+
+    from .strategy_btc_preclose import run_btc_preclose_paper
+
+    out = run_btc_preclose_paper(
+        data_dir=Path(args.data_dir),
+        window_seconds=int(args.window_seconds),
+        cheap_price=Decimal(str(args.cheap_price)),
+        size=Decimal(str(args.size)),
+        starting_cash=Decimal(str(args.starting_cash)),
+    )
+
+    if args.format == "json":
+        print(json.dumps(out, indent=2))
+    else:
+        print("=" * 70)
+        print("BTC PRE-CLOSE PAPER TRIGGER")
+        print("=" * 70)
+        print(
+            f"Window: {out['window_seconds']}s | Cheap <= {out['cheap_price']} | Size {out['size']}"
+        )
+        print(f"Markets scanned: {out['markets_scanned']}")
+        print(f"Near close:      {out['candidates_near_close']}")
+        print(f"Fills recorded:  {out['fills_recorded']}")
+        if out["triggers"]:
+            print("\n--- Triggers ---")
+            for t in out["triggers"][:10]:
+                print(
+                    f"  {t['side']:<3} {t['price']:>5} | ttc={t['time_to_close_seconds']:>6}s | {t['market_slug']}"
+                )
+        print("=" * 70)
 
 
 def cmd_universe_5m(args: argparse.Namespace) -> None:
@@ -1445,6 +1499,83 @@ def cmd_pnl_health(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def cmd_pnl_sanity_check(args: argparse.Namespace) -> None:
+    """Run NAV/PnL sanity check to detect impossible PnL jumps."""
+    from decimal import Decimal
+    from pathlib import Path
+
+    from .pnl_sanity_check import check_pnl_sanity
+
+    result = check_pnl_sanity(
+        data_dir=Path(args.data_dir),
+        snapshot_path=Path(args.snapshot) if args.snapshot else None,
+        pnl_dir=Path(args.pnl_dir) if args.pnl_dir else None,
+        alert_threshold_usd=Decimal(str(args.alert_threshold_usd)),
+        starting_cash=Decimal(str(args.starting_cash)) if args.starting_cash else None,
+        max_pnl_age_hours=float(args.max_pnl_age_hours),
+    )
+
+    if args.format == "json":
+        print(result.to_json())
+    else:
+        status = "✓ PASSED" if result.passed else "✗ FAILED"
+        print("=" * 70)
+        print(f"NAV/PnL SANITY CHECK: {status}")
+        print("=" * 70)
+
+        print("\n--- Computed Values (from fills + current mid) ---")
+        print(f"  Realized PnL:   ${float(result.computed_realized_pnl):,.2f}")
+        print(f"  Unrealized PnL: ${float(result.computed_unrealized_pnl):,.2f}")
+        print(f"  Net PnL:        ${float(result.computed_net_pnl):,.2f}")
+        print(f"  Cash Balance:   ${float(result.computed_cash_balance):,.2f}")
+        print(f"  Mark to Mid:    ${float(result.computed_mark_to_mid):,.2f}")
+        print(f"  Fills Count:    {result.fills_count}")
+
+        if result.previous_timestamp:
+            print("\n--- Previous Values ---")
+            prev_realized = (
+                result.previous_realized_pnl
+                if result.previous_realized_pnl is not None
+                else Decimal("0")
+            )
+            prev_unrealized = (
+                result.previous_unrealized_pnl
+                if result.previous_unrealized_pnl is not None
+                else Decimal("0")
+            )
+            prev_net = (
+                result.previous_net_pnl if result.previous_net_pnl is not None else Decimal("0")
+            )
+            print(f"  Realized PnL:   ${float(prev_realized):,.2f}")
+            print(f"  Unrealized PnL: ${float(prev_unrealized):,.2f}")
+            print(f"  Net PnL:        ${float(prev_net):,.2f}")
+            print(f"  Timestamp:      {result.previous_timestamp}")
+            if result.time_since_previous_hours:
+                print(f"  Age:            {result.time_since_previous_hours:.1f}h")
+
+            print("\n--- Deltas ---")
+            delta_str = f"{float(result.realized_pnl_delta):+,.2f}"
+            print(f"  Realized PnL:   ${delta_str}")
+            delta_str = f"{float(result.unrealized_pnl_delta):+,.2f}"
+            print(f"  Unrealized PnL: ${delta_str}")
+            delta_str = f"{float(result.net_pnl_delta):+,.2f}"
+            print(f"  Net PnL:        ${delta_str}")
+
+        if result.alerts:
+            print(f"\n--- ALERTS ({len(result.alerts)}) ---")
+            for alert in result.alerts:
+                print(f"  ⚠ {alert}")
+        else:
+            print("\n--- ALERTS ---")
+            print("  ✓ No alerts detected")
+
+        print("\n" + "=" * 70)
+
+    # Exit with error code if check failed and --fail is set
+    if args.fail and not result.passed:
+        raise SystemExit(1)
+
+
 def cmd_dataset_join(args: argparse.Namespace) -> None:
     """Align Polymarket 15m snapshots with Binance BTC features for lead/lag analysis."""
     from pathlib import Path
@@ -1704,6 +1835,10 @@ def main() -> None:
     )
     pc.set_defaults(func=cmd_collect_5m)
 
+    pw = sub.add_parser("collect-weather", help="Snapshot /predictions/weather + CLOB orderbooks")
+    pw.add_argument("--out", default="data")
+    pw.set_defaults(func=cmd_collect_weather)
+
     pu = sub.add_parser("universe-5m", help="Build normalized market universe from /predictions/5M")
     pu.add_argument("--out", default="data/universe.json", help="Output JSON file path")
     pu.add_argument("--cross-check", action="store_true", help="Verify against Gamma API")
@@ -1716,6 +1851,16 @@ def main() -> None:
     pc15 = sub.add_parser("collect-15m", help="Snapshot /crypto/15M + CLOB orderbooks")
     pc15.add_argument("--out", default="data")
     pc15.set_defaults(func=cmd_collect_15m)
+
+    pct = sub.add_parser(
+        "collect-top",
+        help="Snapshot a broad set of active markets via Gamma API + CLOB orderbooks",
+    )
+    pct.add_argument("--out", default="data")
+    pct.add_argument("--limit", type=int, default=200)
+    pct.add_argument("--offset", type=int, default=0)
+    pct.add_argument("--search", type=str, default=None)
+    pct.set_defaults(func=cmd_collect_top)
 
     pc15l = sub.add_parser(
         "collect-15m-loop", help="Continuously snapshot /crypto/15M + CLOB orderbooks"
@@ -1990,6 +2135,57 @@ def main() -> None:
         help="Exit with error code if unhealthy",
     )
     ph.set_defaults(func=cmd_pnl_health)
+
+    # PnL sanity check command
+    psc = sub.add_parser(
+        "pnl-sanity-check",
+        help="Run NAV/PnL sanity check to detect impossible PnL jumps",
+    )
+    psc.add_argument(
+        "--data-dir",
+        default="data",
+        help="Data directory (default: data)",
+    )
+    psc.add_argument(
+        "--snapshot",
+        default=None,
+        help="Path to snapshot file for current prices (default: data/latest_15m.json)",
+    )
+    psc.add_argument(
+        "--pnl-dir",
+        default=None,
+        help="Directory for PnL summaries (default: data/pnl)",
+    )
+    psc.add_argument(
+        "--alert-threshold-usd",
+        type=float,
+        default=100.0,
+        help="Threshold for alerting on PnL jumps in USD (default: 100.0)",
+    )
+    psc.add_argument(
+        "--starting-cash",
+        type=float,
+        default=None,
+        help="Starting cash balance (default: 0)",
+    )
+    psc.add_argument(
+        "--max-pnl-age-hours",
+        type=float,
+        default=24.0,
+        help="Maximum age of previous PnL summary in hours (default: 24)",
+    )
+    psc.add_argument(
+        "--format",
+        choices=["json", "human"],
+        default="human",
+        help="Output format",
+    )
+    psc.add_argument(
+        "--fail",
+        action="store_true",
+        help="Exit with error code if sanity check fails",
+    )
+    psc.set_defaults(func=cmd_pnl_sanity_check)
 
     ms = sub.add_parser("microstructure", help="Analyze market microstructure from snapshot")
     ms.add_argument(
@@ -2577,6 +2773,20 @@ def main() -> None:
         "--format", choices=["json", "human"], default="human", help="Output format"
     )
     paper_bt.set_defaults(func=cmd_paper_backtest)
+
+    # BTC pre-close cheap-side trigger (paper)
+    btcpc = sub.add_parser(
+        "btc-preclose-paper",
+        help="Paper-trade cheap-side trigger on BTC 5m markets near close",
+    )
+    btcpc.add_argument("--data-dir", default="data/paper_trading", help="Paper trading data dir")
+    btcpc.add_argument("--window-seconds", type=int, default=60)
+    btcpc.add_argument("--cheap-price", type=float, default=0.03)
+    btcpc.add_argument("--size", type=float, default=1.0)
+    btcpc.add_argument("--starting-cash", type=float, default=0.0)
+    btcpc.add_argument("--format", choices=["json", "human"], default="human")
+    btcpc.set_defaults(func=cmd_btc_preclose_paper)
+
     # Combinatorial arbitrage command
     cb = sub.add_parser(
         "combinatorial-scan",
