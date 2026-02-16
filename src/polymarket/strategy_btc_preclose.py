@@ -23,23 +23,26 @@ def _best_ask(book: dict) -> Decimal | None:
         return None
 
 
-def _load_5m_snapshots(snapshots_dir: Path, max_age_seconds: float = 300) -> list[dict]:
-    """Load recent 5m snapshots from disk.
-    
+def _load_snapshots(snapshots_dir: Path, max_age_seconds: float = 900) -> list[dict]:
+    """Load recent snapshots from disk (supports 5m and 15m).
+
     Args:
         snapshots_dir: Directory containing snapshot files
         max_age_seconds: Maximum age of snapshots to consider
-        
+
     Returns:
         List of snapshot data, sorted by time (newest last)
     """
     snapshots = []
     cutoff = datetime.now(UTC) - timedelta(seconds=max_age_seconds)
-    
+
     if not snapshots_dir.exists():
         return snapshots
-    
-    for file in snapshots_dir.glob("snapshot_5m_*.json"):
+
+    # Support both 5m and 15m snapshot patterns
+    files = list(snapshots_dir.glob("snapshot_5m_*.json")) + list(snapshots_dir.glob("snapshot_15m_*.json"))
+
+    for file in files:
         try:
             # Parse timestamp from filename
             ts_str = file.stem.split("_")[2]  # snapshot_5m_20260216T115617Z
@@ -122,7 +125,7 @@ def run_btc_preclose_paper(
         snapshots_dir = data_dir
 
     # Load recent snapshots
-    snapshots = _load_5m_snapshots(snapshots_dir, max_age_seconds=600)
+    snapshots = _load_snapshots(snapshots_dir, max_age_seconds=900)
     if not snapshots:
         logger.warning("No recent 5m snapshots found in %s", snapshots_dir)
         return {
