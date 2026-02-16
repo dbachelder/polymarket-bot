@@ -362,27 +362,22 @@ def determine_alignment_15m(
 
 def _calculate_mid(book: dict) -> Decimal | None:
     """Calculate mid price from orderbook."""
-    bids = book.get("bids", [])
-    asks = book.get("asks", [])
+    from polymarket.clob import get_best_prices
 
-    if not bids or not asks:
-        return None
-
-    best_bid = Decimal(str(bids[0]["price"])) if bids else None
-    best_ask = Decimal(str(asks[0]["price"])) if asks else None
+    best_bid, best_ask = get_best_prices(book)
 
     if best_bid is None or best_ask is None:
         return None
 
-    return (best_bid + best_ask) / Decimal("2")
+    return (Decimal(str(best_bid)) + Decimal(str(best_ask))) / Decimal("2")
 
 
 def get_best_ask(book: dict) -> Decimal | None:
     """Get best ask price from orderbook."""
-    asks = book.get("asks", [])
-    if not asks:
-        return None
-    return Decimal(str(asks[0]["price"]))
+    from polymarket.clob import get_best_prices
+
+    _, best_ask = get_best_prices(book)
+    return Decimal(str(best_ask)) if best_ask is not None else None
 
 
 def find_both_sides_opportunities(

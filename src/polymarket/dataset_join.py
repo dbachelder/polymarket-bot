@@ -103,10 +103,13 @@ def _extract_btc_market_probabilities(
         if not bids and not asks:
             continue
 
+        from .clob import get_best_prices
+
         has_bid = len(bids) > 0
         has_ask = len(asks) > 0
-        best_bid = float(bids[0]["price"]) if has_bid else 0.0
-        best_ask = float(asks[0]["price"]) if has_ask else 1.0
+        best_bid, best_ask = get_best_prices(yes_book)
+        best_bid = best_bid if best_bid is not None else 0.0
+        best_ask = best_ask if best_ask is not None else 1.0
 
         if has_bid and has_ask:
             mid_price = (best_bid + best_ask) / 2.0
@@ -119,6 +122,16 @@ def _extract_btc_market_probabilities(
 
         spread = best_ask - best_bid if best_ask > best_bid else 0.0
 
+        # Get sizes at best prices (find the order with best price)
+        best_bid_size = 0.0
+        best_ask_size = 0.0
+        if bids:
+            sorted_bids = sorted(bids, key=lambda x: float(x["price"]), reverse=True)
+            best_bid_size = float(sorted_bids[0]["size"])
+        if asks:
+            sorted_asks = sorted(asks, key=lambda x: float(x["price"]))
+            best_ask_size = float(sorted_asks[0]["size"])
+
         return {
             "market_title": market.get("title", ""),
             "market_slug": market.get("slug", ""),
@@ -127,8 +140,8 @@ def _extract_btc_market_probabilities(
             "best_ask": best_ask,
             "mid_price": mid_price,
             "spread": spread,
-            "bid_size": float(bids[0]["size"]) if bids else 0.0,
-            "ask_size": float(asks[0]["size"]) if asks else 0.0,
+            "bid_size": best_bid_size,
+            "ask_size": best_ask_size,
         }
 
     return None

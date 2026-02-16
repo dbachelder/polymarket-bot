@@ -146,26 +146,25 @@ class PolymarketClient:
         no_id = str(token_ids[1])
 
         try:
+            from polymarket.clob import get_best_prices
+
             yes_book = get_book(yes_id)
             no_book = get_book(no_id)
 
-            yes_bids = yes_book.get("bids", [])
-            yes_asks = yes_book.get("asks", [])
-            no_bids = no_book.get("bids", [])
-            no_asks = no_book.get("asks", [])
-
-            # Calculate mid prices
-            yes_bid = float(yes_bids[0]["price"]) if yes_bids else None
-            yes_ask = float(yes_asks[0]["price"]) if yes_asks else None
-            no_bid = float(no_bids[0]["price"]) if no_bids else None
-            no_ask = float(no_asks[0]["price"]) if no_asks else None
+            # Calculate mid prices using correct best prices
+            yes_bid, yes_ask = get_best_prices(yes_book)
+            no_bid, no_ask = get_best_prices(no_book)
 
             yes_price = (yes_bid + yes_ask) / 2 if yes_bid and yes_ask else yes_bid or yes_ask
             no_price = (no_bid + no_ask) / 2 if no_bid and no_ask else no_bid or no_ask
 
-            # Calculate liquidity at best prices
-            yes_liquidity = sum(float(b["size"]) for b in yes_bids[:3]) if yes_bids else 0
-            no_liquidity = sum(float(b["size"]) for b in no_bids[:3]) if no_bids else 0
+            # Calculate liquidity at best prices (sort appropriately)
+            yes_bids = yes_book.get("bids", [])
+            no_bids = no_book.get("bids", [])
+            yes_bids_sorted = sorted(yes_bids, key=lambda x: float(x["price"]), reverse=True)
+            no_bids_sorted = sorted(no_bids, key=lambda x: float(x["price"]), reverse=True)
+            yes_liquidity = sum(float(b["size"]) for b in yes_bids_sorted[:3]) if yes_bids else 0
+            no_liquidity = sum(float(b["size"]) for b in no_bids_sorted[:3]) if no_bids else 0
 
             return VenueMarket(
                 venue="polymarket",
@@ -209,20 +208,16 @@ class PolymarketClient:
         yes_id = str(token_ids[0])
         no_id = str(token_ids[1])
 
+        from polymarket.clob import get_best_prices
+
         # Try to get orderbook data if available in the page data
         books = data.get("books", {})
         yes_book = books.get("yes", {})
         no_book = books.get("no", {})
 
-        yes_bids = yes_book.get("bids", [])
-        yes_asks = yes_book.get("asks", [])
-        no_bids = no_book.get("bids", [])
-        no_asks = no_book.get("asks", [])
-
-        yes_bid = float(yes_bids[0]["price"]) if yes_bids else None
-        yes_ask = float(yes_asks[0]["price"]) if yes_asks else None
-        no_bid = float(no_bids[0]["price"]) if no_bids else None
-        no_ask = float(no_asks[0]["price"]) if no_asks else None
+        # Calculate mid prices using correct best prices
+        yes_bid, yes_ask = get_best_prices(yes_book)
+        no_bid, no_ask = get_best_prices(no_book)
 
         yes_price = (yes_bid + yes_ask) / 2 if yes_bid and yes_ask else yes_bid or yes_ask
         no_price = (no_bid + no_ask) / 2 if no_bid and no_ask else no_bid or no_ask

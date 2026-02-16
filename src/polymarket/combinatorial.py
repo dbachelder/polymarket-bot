@@ -248,19 +248,23 @@ def _get_best_asks(token_ids: list[str]) -> dict[str, dict[str, float]]:
 
     Returns dict mapping token_id -> {"ask": float, "bid": float, "liquidity": float}
     """
+    from polymarket.clob import get_best_prices
+
     results = {}
     for token_id in token_ids:
         try:
             book = get_book(token_id)
-            asks = book.get("asks", [])
             bids = book.get("bids", [])
+            asks = book.get("asks", [])
 
-            best_ask = float(asks[0]["price"]) if asks else None
-            best_bid = float(bids[0]["price"]) if bids else None
+            best_bid, best_ask = get_best_prices(book)
 
-            # Estimate liquidity at best prices
-            ask_liquidity = sum(float(a["size"]) for a in asks[:3]) if asks else 0
-            bid_liquidity = sum(float(b["size"]) for b in bids[:3]) if bids else 0
+            # Estimate liquidity at best prices (sum top 3 levels)
+            # Sort appropriately: bids desc, asks asc
+            sorted_bids = sorted(bids, key=lambda x: float(x["price"]), reverse=True)
+            sorted_asks = sorted(asks, key=lambda x: float(x["price"]))
+            ask_liquidity = sum(float(a["size"]) for a in sorted_asks[:3]) if asks else 0
+            bid_liquidity = sum(float(b["size"]) for b in sorted_bids[:3]) if bids else 0
             liquidity = min(ask_liquidity, bid_liquidity)
 
             results[token_id] = {
