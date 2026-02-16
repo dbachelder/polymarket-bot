@@ -1,0 +1,11 @@
+FILLS STALL ALERT: No fills for 13.4 hours (threshold: 6h)
+======================================================================
+FILLS MONITOR
+======================================================================
+Status: stale
+Message: No fills for 13.4 hours (threshold: 6h)
+Total fills: 1
+Hours since last fill: 13.4
+ALERT: Fills are stale!
+Auto-adjusted: price=0.1125, window=600s
+======================================================================

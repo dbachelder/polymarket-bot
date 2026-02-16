@@ -153,6 +153,7 @@ def cmd_btc_preclose_paper(args: argparse.Namespace) -> None:
         cheap_price=cheap_price,
         size=Decimal(str(args.size)),
         starting_cash=Decimal(str(args.starting_cash)),
+        snapshots_dir=Path(args.snapshots_dir),
     )
 
     if args.format == "json":
@@ -200,6 +201,7 @@ def cmd_btc_preclose_paper_loop(args: argparse.Namespace) -> None:
         starting_cash=Decimal(str(args.starting_cash)),
         loop_duration_minutes=int(args.loop_duration_minutes),
         interval_seconds=int(args.interval_seconds),
+        snapshots_dir=Path(args.snapshots_dir),
     )
 
     if args.format == "json":
@@ -702,7 +704,10 @@ def cmd_weather_scan(args: argparse.Namespace) -> None:
     snapshots_dir = Path(args.snapshots_dir) if args.snapshots_dir else None
     cities = args.cities.split(",") if args.cities else None
 
+    # strategy_weather.run_weather_scan requires a data_dir for paper fills.
+    # Keep CLI simple: default to ./data unless/until we add a flag.
     result = run_weather_scan(
+        data_dir=Path("data"),
         snapshots_dir=snapshots_dir,
         cities=cities,
         dry_run=not args.live,
@@ -718,11 +723,11 @@ def cmd_weather_scan(args: argparse.Namespace) -> None:
         print(f"Markets scanned: {result['markets_scanned']}")
         print(f"Signals generated: {result['signals_generated']}")
         print(f"Actionable signals: {result['actionable_signals']}")
-        print(f"Trades executed: {result['trades_executed']}")
-        print(f"Dry run: {result['dry_run']}")
+        print(f"Fills recorded: {result.get('fills_recorded', 0)}")
+        print(f"Dry run: {result.get('dry_run', True)}")
 
         # Show consensus
-        if result["consensus"]:
+        if result.get("consensus"): 
             print("\n--- Model Consensus ---")
             for city, cons in result["consensus"].items():
                 print(
@@ -3061,6 +3066,7 @@ def main() -> None:
         help="Paper-trade cheap-side trigger on BTC 5m markets near close",
     )
     btcpc.add_argument("--data-dir", default="data/paper_trading", help="Paper trading data dir")
+    btcpc.add_argument("--snapshots-dir", default="data", help="Directory with collector snapshots (default: data)")
     btcpc.add_argument("--window-seconds", type=int, default=300, help="Time window before close (default: 300s)")
     btcpc.add_argument("--cheap-price", type=float, default=0.05, help="Cheap price threshold (default: 0.05)")
     btcpc.add_argument("--size", type=float, default=1.0)
@@ -3075,6 +3081,7 @@ def main() -> None:
         help="Run BTC preclose paper trading in a loop for extended coverage",
     )
     btcpl.add_argument("--data-dir", default="data/paper_trading", help="Paper trading data dir")
+    btcpl.add_argument("--snapshots-dir", default="data", help="Directory with collector snapshots (default: data)")
     btcpl.add_argument("--window-seconds", type=int, default=300, help="Time window before close (default: 300s)")
     btcpl.add_argument("--cheap-price", type=float, default=0.05, help="Cheap price threshold (default: 0.05)")
     btcpl.add_argument("--size", type=float, default=1.0)
