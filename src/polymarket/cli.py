@@ -1462,7 +1462,6 @@ def cmd_accounting_init(args: argparse.Namespace) -> None:
 def cmd_accounting_record_fill(args: argparse.Namespace) -> None:
     """Record a paper trade fill in accounting database."""
     from decimal import Decimal
-    from pathlib import Path
     from uuid import uuid4
 
     from .accounting import AccountingDB, AccountingFill
@@ -1526,6 +1525,7 @@ def cmd_accounting_record_fill(args: argparse.Namespace) -> None:
 
 def cmd_accounting_snapshot(args: argparse.Namespace) -> None:
     """Record portfolio snapshot."""
+    from decimal import Decimal
     from pathlib import Path
 
     from .accounting import AccountingDB
@@ -1662,6 +1662,8 @@ def cmd_accounting_positions(args: argparse.Namespace) -> None:
 
 def cmd_accounting_exposures(args: argparse.Namespace) -> None:
     """Show current exposures breakdown."""
+    from decimal import Decimal
+
     from .accounting import AccountingDB
 
     db = AccountingDB(args.db_path)
@@ -1739,6 +1741,7 @@ def cmd_accounting_cash(args: argparse.Namespace) -> None:
 
 def cmd_accounting_import_fills(args: argparse.Namespace) -> None:
     """Import fills from JSON/JSONL file."""
+    from decimal import Decimal
     from pathlib import Path
     from uuid import uuid4
 
