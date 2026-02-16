@@ -1,0 +1,16 @@
+[Unit]
+Description=Polymarket Bot Collector Watchdog
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/dan/src/polymarket-bot
+Environment="PATH=/home/dan/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/home/dan/src/polymarket-bot/.venv/bin/python -m polymarket.cli watchdog --data-dir data --max-age-seconds 120
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=polymarket-watchdog
+
+[Install]
+WantedBy=multi-user.target
