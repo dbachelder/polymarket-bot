@@ -135,12 +135,22 @@ def cmd_btc_preclose_paper(args: argparse.Namespace) -> None:
     from decimal import Decimal
     from pathlib import Path
 
+    from .fills_monitor import get_current_thresholds
     from .strategy_btc_preclose import run_btc_preclose_paper
+
+    # Use auto-adjusted thresholds if available
+    cheap_price = Decimal(str(args.cheap_price))
+    window_seconds = int(args.window_seconds)
+
+    if args.use_monitor_thresholds:
+        monitored_price, monitored_window = get_current_thresholds()
+        cheap_price = monitored_price
+        window_seconds = monitored_window
 
     out = run_btc_preclose_paper(
         data_dir=Path(args.data_dir),
-        window_seconds=int(args.window_seconds),
-        cheap_price=Decimal(str(args.cheap_price)),
+        window_seconds=window_seconds,
+        cheap_price=cheap_price,
         size=Decimal(str(args.size)),
         starting_cash=Decimal(str(args.starting_cash)),
     )
@@ -163,6 +173,84 @@ def cmd_btc_preclose_paper(args: argparse.Namespace) -> None:
                 print(
                     f"  {t['side']:<3} {t['price']:>5} | ttc={t['time_to_close_seconds']:>6}s | {t['market_slug']}"
                 )
+        print("=" * 70)
+
+
+def cmd_btc_preclose_paper_loop(args: argparse.Namespace) -> None:
+    from decimal import Decimal
+    from pathlib import Path
+
+    from .fills_monitor import get_current_thresholds
+    from .strategy_btc_preclose import run_btc_preclose_loop
+
+    # Use auto-adjusted thresholds if available
+    cheap_price = Decimal(str(args.cheap_price))
+    window_seconds = int(args.window_seconds)
+
+    if args.use_monitor_thresholds:
+        monitored_price, monitored_window = get_current_thresholds()
+        cheap_price = monitored_price
+        window_seconds = monitored_window
+
+    out = run_btc_preclose_loop(
+        data_dir=Path(args.data_dir),
+        window_seconds=window_seconds,
+        cheap_price=cheap_price,
+        size=Decimal(str(args.size)),
+        starting_cash=Decimal(str(args.starting_cash)),
+        loop_duration_minutes=int(args.loop_duration_minutes),
+        interval_seconds=int(args.interval_seconds),
+    )
+
+    if args.format == "json":
+        print(json.dumps(out, indent=2))
+    else:
+        print("=" * 70)
+        print("BTC PRE-CLOSE PAPER LOOP")
+        print("=" * 70)
+        print(f"Duration: {out['loop_duration_minutes']}min | Interval: {out['interval_seconds']}s")
+        print(f"Iterations: {out['iterations']}")
+        print(
+            f"Window: {out['window_seconds']}s | Cheap <= {out['cheap_price']} | Size {out['size']}"
+        )
+        print(f"Total markets scanned: {out['total_markets_scanned']}")
+        print(f"Total near close:      {out['total_candidates_near_close']}")
+        print(f"Total fills recorded:  {out['total_fills_recorded']}")
+        if out["all_triggers"]:
+            print("\n--- All Triggers ---")
+            for t in out["all_triggers"][:10]:
+                print(
+                    f"  {t['side']:<3} {t['price']:>5} | ttc={t['time_to_close_seconds']:>6}s | {t['market_slug']}"
+                )
+        print("=" * 70)
+
+
+def cmd_fills_monitor(args: argparse.Namespace) -> None:
+    from pathlib import Path
+
+    from .fills_monitor import run_fills_monitor
+
+    out = run_fills_monitor(
+        fills_path=Path(args.fills_path),
+        stale_hours=int(args.stale_hours),
+        auto_adjust=bool(args.auto_adjust),
+    )
+
+    if args.format == "json":
+        print(json.dumps(out, indent=2))
+    else:
+        print("=" * 70)
+        print("FILLS MONITOR")
+        print("=" * 70)
+        print(f"Status: {out['status']}")
+        print(f"Message: {out['message']}")
+        print(f"Total fills: {out['total_fills']}")
+        if out['hours_since_last_fill']:
+            print(f"Hours since last fill: {out['hours_since_last_fill']}")
+        if out.get('alert_triggered'):
+            print("ALERT: Fills are stale!")
+        if out.get('auto_adjusted'):
+            print(f"Auto-adjusted: price={out['new_cheap_price']}, window={out['new_window_seconds']}s")
         print("=" * 70)
 
 
@@ -2865,12 +2953,40 @@ def main() -> None:
         help="Paper-trade cheap-side trigger on BTC 5m markets near close",
     )
     btcpc.add_argument("--data-dir", default="data/paper_trading", help="Paper trading data dir")
-    btcpc.add_argument("--window-seconds", type=int, default=60)
-    btcpc.add_argument("--cheap-price", type=float, default=0.03)
+    btcpc.add_argument("--window-seconds", type=int, default=300, help="Time window before close (default: 300s)")
+    btcpc.add_argument("--cheap-price", type=float, default=0.05, help="Cheap price threshold (default: 0.05)")
     btcpc.add_argument("--size", type=float, default=1.0)
     btcpc.add_argument("--starting-cash", type=float, default=0.0)
+    btcpc.add_argument("--use-monitor-thresholds", action="store_true", help="Use auto-adjusted thresholds from fills monitor")
     btcpc.add_argument("--format", choices=["json", "human"], default="human")
     btcpc.set_defaults(func=cmd_btc_preclose_paper)
+
+    # BTC pre-close cheap-side trigger (paper) - LOOP MODE for extended coverage
+    btcpl = sub.add_parser(
+        "btc-preclose-paper-loop",
+        help="Run BTC preclose paper trading in a loop for extended coverage",
+    )
+    btcpl.add_argument("--data-dir", default="data/paper_trading", help="Paper trading data dir")
+    btcpl.add_argument("--window-seconds", type=int, default=300, help="Time window before close (default: 300s)")
+    btcpl.add_argument("--cheap-price", type=float, default=0.05, help="Cheap price threshold (default: 0.05)")
+    btcpl.add_argument("--size", type=float, default=1.0)
+    btcpl.add_argument("--starting-cash", type=float, default=0.0)
+    btcpl.add_argument("--loop-duration-minutes", type=int, default=10, help="How long to run (default: 10 min)")
+    btcpl.add_argument("--interval-seconds", type=int, default=60, help="Seconds between scans (default: 60)")
+    btcpl.add_argument("--use-monitor-thresholds", action="store_true", help="Use auto-adjusted thresholds from fills monitor")
+    btcpl.add_argument("--format", choices=["json", "human"], default="human")
+    btcpl.set_defaults(func=cmd_btc_preclose_paper_loop)
+
+    # Fills monitor - checks for stale fills and auto-adjusts thresholds
+    fm = sub.add_parser(
+        "fills-monitor",
+        help="Monitor fills for staleness and auto-adjust thresholds",
+    )
+    fm.add_argument("--fills-path", default="data/fills.jsonl", help="Path to fills.jsonl")
+    fm.add_argument("--stale-hours", type=int, default=6, help="Hours to consider fills stale")
+    fm.add_argument("--auto-adjust", action="store_true", default=True, help="Auto-adjust thresholds when stale")
+    fm.add_argument("--format", choices=["json", "human"], default="human")
+    fm.set_defaults(func=cmd_fills_monitor)
 
     # Combinatorial arbitrage command
     cb = sub.add_parser(

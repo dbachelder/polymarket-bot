@@ -37,14 +37,19 @@ from .weather import (
 
 logger = logging.getLogger(__name__)
 
-# Cities to monitor (starting with NYC + London as per test parameters)
-DEFAULT_CITIES = ["nyc", "london", "chicago", "seattle", "atlanta", "dallas", "miami"]
+# Cities to monitor (expanded universe for more opportunities)
+DEFAULT_CITIES = [
+    "nyc", "london", "chicago", "seattle", "atlanta", "dallas", "miami",
+    "los_angeles", "san_francisco", "boston", "washington", "philadelphia",
+    "denver", "phoenix", "houston", "detroit", "minneapolis", "portland",
+    "las_vegas", "san_diego", "austin", "nashville", "new_orleans",
+]
 
-# Entry thresholds
-YES_ENTRY_MAX_PRICE = 0.15
-YES_ENTRY_MIN_PROBABILITY = 0.70
-NO_ENTRY_MIN_PRICE = 0.45
-NO_ENTRY_MAX_PROBABILITY = 0.20
+# Entry thresholds (loosened to increase signal frequency)
+YES_ENTRY_MAX_PRICE = 0.25  # Increased from 0.15
+YES_ENTRY_MIN_PROBABILITY = 0.60  # Decreased from 0.70
+NO_ENTRY_MIN_PRICE = 0.35  # Decreased from 0.45
+NO_ENTRY_MAX_PROBABILITY = 0.30  # Increased from 0.20
 
 # Position sizing
 MAX_POSITION_SIZE = 5.0  # contracts per trade
@@ -94,7 +99,7 @@ def _extract_city_from_question(question: str) -> str | None:
     """
     question_lower = question.lower()
 
-    # City patterns to match
+    # City patterns to match (expanded universe)
     city_patterns = [
         ("nyc", ["nyc", "new york city", "new york, ny"]),
         ("new_york", ["new york"]),
@@ -104,6 +109,22 @@ def _extract_city_from_question(question: str) -> str | None:
         ("atlanta", ["atlanta"]),
         ("dallas", ["dallas"]),
         ("miami", ["miami"]),
+        ("los_angeles", ["los angeles", "la, ca", "l.a."]),
+        ("san_francisco", ["san francisco", "sf, ca", "sf bay"]),
+        ("boston", ["boston"]),
+        ("washington", ["washington, dc", "washington dc", "dc"]),
+        ("philadelphia", ["philadelphia", "philly"]),
+        ("denver", ["denver"]),
+        ("phoenix", ["phoenix"]),
+        ("houston", ["houston"]),
+        ("detroit", ["detroit"]),
+        ("minneapolis", ["minneapolis"]),
+        ("portland", ["portland, or", "portland, oregon"]),
+        ("las_vegas", ["las vegas"]),
+        ("san_diego", ["san diego"]),
+        ("austin", ["austin, tx", "austin, texas"]),
+        ("nashville", ["nashville"]),
+        ("new_orleans", ["new orleans"]),
     ]
 
     for city_id, patterns in city_patterns:
