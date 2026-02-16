@@ -151,6 +151,8 @@ def cmd_btc_preclose_paper(args: argparse.Namespace) -> None:
         data_dir=Path(args.data_dir),
         window_seconds=window_seconds,
         cheap_price=cheap_price,
+        fair_price_threshold=Decimal(str(args.fair_price_threshold)),
+        wide_spread_threshold=Decimal(str(args.wide_spread_threshold)),
         size=Decimal(str(args.size)),
         starting_cash=Decimal(str(args.starting_cash)),
         snapshots_dir=Path(args.snapshots_dir),
@@ -163,7 +165,7 @@ def cmd_btc_preclose_paper(args: argparse.Namespace) -> None:
         print("BTC PRE-CLOSE PAPER TRIGGER")
         print("=" * 70)
         print(
-            f"Window: {out['window_seconds']}s | Cheap <= {out['cheap_price']} | Size {out['size']}"
+            f"Window: {out['window_seconds']}s | Cheap <= {out['cheap_price']} | Fair <= {out.get('fair_price_threshold', 'N/A')} | Size {out['size']}"
         )
         print(f"Markets scanned: {out['markets_scanned']}")
         print(f"Near close:      {out['candidates_near_close']}")
@@ -3071,6 +3073,8 @@ def main() -> None:
     btcpc.add_argument("--snapshots-dir", default="data", help="Directory with collector snapshots (default: data)")
     btcpc.add_argument("--window-seconds", type=int, default=300, help="Time window before close (default: 300s)")
     btcpc.add_argument("--cheap-price", type=float, default=0.05, help="Cheap price threshold (default: 0.05)")
+    btcpc.add_argument("--fair-price-threshold", type=float, default=0.35, help="Wide-spread entry threshold (default: 0.35)")
+    btcpc.add_argument("--wide-spread-threshold", type=float, default=0.10, help="Spread > this triggers fair-price entry (default: 0.10)")
     btcpc.add_argument("--size", type=float, default=1.0)
     btcpc.add_argument("--starting-cash", type=float, default=0.0)
     btcpc.add_argument("--use-monitor-thresholds", action="store_true", help="Use auto-adjusted thresholds from fills monitor")
