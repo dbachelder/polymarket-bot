@@ -39,6 +39,38 @@ docs/                    # Documentation
 ./run.sh pnl-verify        # Verify PnL from fills
 ./run.sh health-check      # Check collector health
 ./run.sh tests             # Run pytest suite
+
+# Fills collection (requires API credentials)
+./run.sh collect-fills          # Single fills collection
+./run.sh collect-fills-loop     # Continuous fills collection
+./scripts/check-credentials.sh  # Verify API credentials
+```
+
+## API Credentials
+
+Fills collection requires Polymarket API credentials. Configure via one of:
+
+1. **Environment variables:**
+   ```bash
+   export POLYMARKET_API_KEY=your_key
+   export POLYMARKET_API_SECRET=your_secret
+   export POLYMARKET_API_PASSPHRASE=your_passphrase
+   ```
+
+2. **1Password (recommended):**
+   ```bash
+   source ./scripts/load-env-from-1password.sh
+   ```
+
+3. **`.env` file:**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your credentials
+   ```
+
+Verify credentials are working:
+```bash
+./scripts/check-credentials.sh
 ```
 
 ## Development

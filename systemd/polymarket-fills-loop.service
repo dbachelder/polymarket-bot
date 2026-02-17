@@ -1,0 +1,31 @@
+[Unit]
+Description=Polymarket Fills Collection Loop
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/dan/src/polymarket-bot
+Environment="PATH=/home/dan/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONUNBUFFERED=1"
+
+# Option 1: Load credentials directly from environment (if set in systemd user session)
+# Environment="POLYMARKET_API_KEY=%I"
+# Environment="POLYMARKET_API_SECRET=%I"
+# Environment="POLYMARKET_API_PASSPHRASE=%I"
+
+# Option 2: Use 1Password credential helper
+# Requires: 1Password CLI installed and signed in
+# ExecStartPre=/bin/bash -c 'eval $(op signin) && export POLYMARKET_API_KEY=$(op item get "Polymarket API" --field password) && export POLYMARKET_API_SECRET=$(op item get "Polymarket API" --field "API Secret") && export POLYMARKET_API_PASSPHRASE=$(op item get "Polymarket API" --field "Passphrase")'
+
+# Option 3: Use wrapper script that loads from 1Password
+ExecStart=/home/dan/src/polymarket-bot/scripts/run-fills-loop-with-creds.sh --interval-seconds 300 --stale-alert-hours 24 --warn-hours 6 --paper --account
+
+Restart=always
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=polymarket-fills-loop
+
+[Install]
+WantedBy=default.target
