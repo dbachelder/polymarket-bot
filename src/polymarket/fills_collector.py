@@ -264,6 +264,7 @@ def collect_fills(
     include_account: bool = True,
     include_paper: bool = True,
     since: datetime | None = None,
+    lookback_hours: float = 72.0,
 ) -> dict:
     """Collect fills from all sources and write to fills.jsonl.
 
@@ -272,7 +273,8 @@ def collect_fills(
         paper_fills_path: Path to paper trading fills.jsonl
         include_account: Whether to fetch real account fills
         include_paper: Whether to include paper trading fills
-        since: Only collect fills after this timestamp
+        since: Only collect fills after this timestamp (deprecated: use lookback_hours)
+        lookback_hours: Fixed lookback window in hours (default: 72h)
 
     Returns:
         Dict with collection results summary
@@ -286,12 +288,11 @@ def collect_fills(
     # Get existing transaction hashes for deduplication
     existing_txs = get_existing_tx_hashes(fills_path)
 
-    # Get last fill timestamp if not provided
+    # Use fixed lookback window instead of since=last_fill to avoid missing fills
+    # when last_fill timestamp is stale or there are clock/sync issues
     if since is None:
-        since = get_last_fill_timestamp(fills_path)
-        if since:
-            # Overlap by 1 hour to catch any fills that might have been delayed
-            since = since - timedelta(hours=1)
+        since = datetime.now(UTC) - timedelta(hours=lookback_hours)
+        logger.debug("Using fixed lookback window: %.1fh (since=%s)", lookback_hours, since.isoformat())
 
     results = {
         "fills_path": str(fills_path),
@@ -300,6 +301,7 @@ def collect_fills(
         "duplicates_skipped": 0,
         "total_appended": 0,
         "since": since.isoformat() if since else None,
+        "lookback_hours": lookback_hours,
         "timestamp": datetime.now(UTC).isoformat(),
     }
 

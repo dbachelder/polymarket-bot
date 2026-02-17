@@ -95,26 +95,28 @@ def _extract_btc_markets(snapshots: list[dict]) -> list[dict]:
 def run_btc_preclose_paper(
     *,
     data_dir: Path,
-    window_seconds: int = 900,  # Widened from 600 to 900 (15 min window)
-    cheap_price: Decimal = Decimal("0.25"),  # Temporarily widened from 0.08 to 0.25 to force fills
+    window_seconds: int = 1800,  # Widened to 1800s (30 min window) for more opportunities
+    cheap_price: Decimal = Decimal("0.15"),  # Lowered from 0.25 to 0.15 for more fills
     size: Decimal = Decimal("1"),
     starting_cash: Decimal = Decimal("0"),
     snapshots_dir: Path | None = None,
+    verbose_tick: bool = True,  # Log every tick with market data
 ) -> dict[str, Any]:
     """Paper-trade cheap-side trigger on BTC 5m markets near close.
 
     Uses snapshot data from collector instead of scraping (which is broken).
-    
+
     For each market ending within `window_seconds`, fetch YES/NO books.
     If either side's best ask <= cheap_price, record a paper BUY at that ask.
 
     Args:
         data_dir: Directory to store paper trading data
-        window_seconds: Time window before close to consider markets (default: 600 = 10 min)
-        cheap_price: Maximum price to consider "cheap" (default: 0.08)
+        window_seconds: Time window before close to consider markets (default: 1800 = 30 min)
+        cheap_price: Maximum price to consider "cheap" (default: 0.15)
         size: Position size per trade
         starting_cash: Starting cash balance
         snapshots_dir: Directory with collector snapshots (defaults to data_dir)
+        verbose_tick: Log time_to_close and best bid/ask every tick
 
     Returns:
         Dict with scan results including triggers and fills
@@ -202,16 +204,18 @@ def run_btc_preclose_paper(
         }
         near_close_log.append(near_close_entry)
         
-        # Detailed logging for why no fill occurred
+        # Detailed logging for every tick (verbose instrumentation)
         min_ask = min(yes_ask or Decimal("1.0"), no_ask or Decimal("1.0"))
-        if min_ask > cheap_price:
+        if verbose_tick:
             logger.info(
-                "BTC preclose no-fill: %s ttc=%.0fs yes_ask=%s no_ask=%s (cheap_price=%s)",
+                "BTC preclose tick: %s ttc=%.0fs yes_ask=%s no_ask=%s min_ask=%s cheap=%s fill=%s",
                 m.get("slug", "unknown"),
                 ttc,
                 yes_ask,
                 no_ask,
+                min_ask,
                 cheap_price,
+                "YES" if min_ask <= cheap_price else "NO",
             )
 
         token_id = None
@@ -295,28 +299,31 @@ def run_btc_preclose_paper(
 def run_btc_preclose_loop(
     *,
     data_dir: Path,
-    window_seconds: int = 900,  # Widened from 600 to 900 (15 min window)
-    cheap_price: Decimal = Decimal("0.25"),  # Temporarily widened from 0.08 to 0.25 to force fills
+    window_seconds: int = 1800,  # 30 min window (widened)
+    cheap_price: Decimal = Decimal("0.15"),  # Lowered from 0.25 for more fills
     size: Decimal = Decimal("1"),
     starting_cash: Decimal = Decimal("0"),
-    loop_duration_minutes: int = 10,
-    interval_seconds: int = 60,
+    loop_duration_minutes: int = 30,  # Run for 30 min (final 30m before close)
+    interval_seconds: int = 60,  # 60s cadence as specified
     snapshots_dir: Path | None = None,
+    final_window_minutes: int = 30,  # Final window to focus on
 ) -> dict[str, Any]:
     """Run BTC preclose paper trading in a loop for extended coverage.
 
     This runs the preclose scanner every interval_seconds for loop_duration_minutes,
-    catching markets that enter the window during the loop period.
+    catching markets that enter the window during the loop period. Designed to run
+    at 60s cadence for the final 30m before market close.
 
     Args:
         data_dir: Directory to store paper trading data
-        window_seconds: Time window before close to consider markets
-        cheap_price: Maximum price to consider "cheap"
+        window_seconds: Time window before close to consider markets (default: 1800 = 30 min)
+        cheap_price: Maximum price to consider "cheap" (default: 0.15)
         size: Position size per trade
         starting_cash: Starting cash balance
-        loop_duration_minutes: How long to run the loop (default: 10 min)
+        loop_duration_minutes: How long to run the loop (default: 30 min)
         interval_seconds: Seconds between scans (default: 60)
         snapshots_dir: Directory with collector snapshots
+        final_window_minutes: Final window to focus on (default: 30 min)
 
     Returns:
         Dict with aggregated results from all iterations

@@ -83,6 +83,7 @@ def run_collect_fills_loop(
     include_account: bool = True,
     include_paper: bool = True,
     stale_alert_hours: float = DEFAULT_STALE_ALERT_HOURS,
+    lookback_hours: float = 72.0,
     on_stale_alert: Callable[[str], None] | None = None,
 ) -> None:
     """Run continuous fills collection loop.
@@ -95,6 +96,7 @@ def run_collect_fills_loop(
         include_account: Whether to fetch real account fills
         include_paper: Whether to include paper trading fills
         stale_alert_hours: Hours before triggering stale alert
+        lookback_hours: Fixed lookback window in hours for fill queries
         on_stale_alert: Optional callback for stale alerts
     """
     if data_dir is None:
@@ -109,8 +111,9 @@ def run_collect_fills_loop(
     paper_fills_path = Path(paper_fills_path)
 
     logger.info(
-        "Starting collect-fills loop: interval=%.0fs account=%s paper=%s",
+        "Starting collect-fills loop: interval=%.0fs lookback=%.0fh account=%s paper=%s",
         interval_seconds,
+        lookback_hours,
         include_account,
         include_paper,
     )
@@ -128,6 +131,7 @@ def run_collect_fills_loop(
                 paper_fills_path=paper_fills_path,
                 include_account=include_account,
                 include_paper=include_paper,
+                lookback_hours=lookback_hours,
             )
 
             # Log collection results
