@@ -1722,7 +1722,11 @@ def cmd_collect_fills_loop(args: argparse.Namespace) -> None:
     """Run continuous fills collection loop."""
     from pathlib import Path
 
+    from .fills_collector import startup_diagnostic
     from .fills_loop import run_collect_fills_loop
+
+    # Run startup diagnostic first to catch credential issues early
+    startup_diagnostic()
 
     run_collect_fills_loop(
         data_dir=Path(args.data_dir) if args.data_dir else None,
@@ -1734,6 +1738,85 @@ def cmd_collect_fills_loop(args: argparse.Namespace) -> None:
         stale_alert_hours=float(args.stale_alert_hours),
         lookback_hours=float(args.lookback_hours),
     )
+
+
+def cmd_test_auth(args: argparse.Namespace) -> None:
+    """Test API credentials and authentication."""
+    import json
+
+    from .fills_collector import test_credentials_detailed
+
+    result = test_credentials_detailed()
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2, default=str))
+    else:
+        print("=" * 70)
+        print("POLYMARKET API CREDENTIAL TEST")
+        print("=" * 70)
+        print()
+
+        creds = result.get("credentials", {})
+        print("--- Credentials Status ---")
+        print(f"Has credentials: {creds.get('has_credentials', False)}")
+        print(f"Can trade:       {creds.get('can_trade', False)}")
+        print(f"Dry run:         {creds.get('dry_run', True)}")
+        print()
+
+        print("--- Environment Variables ---")
+        for key, value in result.get("raw_env", {}).items():
+            print(f"  {key}: {value}")
+        print()
+
+        print(f"Working directory: {result.get('working_directory', 'unknown')}")
+        print(".env files checked:")
+        for env_file in creds.get("env_files_checked", []):
+            status = "EXISTS" if env_file.get("exists") else "NOT FOUND"
+            print(f"  {env_file['path']}: {status}")
+        print()
+
+        auth_test = result.get("api_auth_test", {})
+        print("--- API Authentication Test ---")
+        if auth_test.get("skipped"):
+            print("SKIPPED: No credentials to test")
+        elif auth_test.get("success"):
+            print("SUCCESS: Authentication test passed")
+            print(f"  Endpoint: {auth_test.get('endpoint', 'N/A')}")
+            print(f"  Status:   {auth_test.get('status_code', 'N/A')}")
+        else:
+            print(f"FAILED: {auth_test.get('error', 'Unknown error')}")
+            print(f"  Endpoint: {auth_test.get('endpoint', 'N/A')}")
+            print(f"  Status:   {auth_test.get('status_code', 'N/A')}")
+        print()
+
+        actions = result.get("actions_required", [])
+        if actions:
+            print("--- Actions Required ---")
+            for i, action in enumerate(actions, 1):
+                print(f"  {i}. {action}")
+            print()
+
+        errors = result.get("errors", [])
+        warnings = result.get("warnings", [])
+        if errors:
+            print(f"--- Errors ({len(errors)}) ---")
+            for error in errors:
+                print(f"  ERROR: {error}")
+            print()
+        if warnings:
+            print(f"--- Warnings ({len(warnings)}) ---")
+            for warning in warnings:
+                print(f"  WARNING: {warning}")
+            print()
+
+        print("=" * 70)
+        if result.get("api_auth_ok"):
+            print("STATUS: OK - Authentication is working")
+        elif result.get("credentials_ok"):
+            print("STATUS: PARTIAL - Credentials present but auth failed")
+        else:
+            print("STATUS: FAILED - Credentials missing")
+        print("=" * 70)
 
 
 def cmd_pnl_loop(args: argparse.Namespace) -> None:
@@ -2469,6 +2552,19 @@ def main() -> None:
         help="Fixed lookback window in hours for fill queries (default: 72)",
     )
     cfl.set_defaults(func=cmd_collect_fills_loop)
+
+    # Test auth command
+    ta = sub.add_parser(
+        "test-auth",
+        help="Test API credentials and authentication",
+    )
+    ta.add_argument(
+        "--format",
+        choices=["json", "human"],
+        default="human",
+        help="Output format",
+    )
+    ta.set_defaults(func=cmd_test_auth)
 
     # PnL loop command
     pl = sub.add_parser(
