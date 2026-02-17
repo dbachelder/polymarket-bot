@@ -261,15 +261,25 @@ def cmd_paper_fill_loop(args: argparse.Namespace) -> None:
     from decimal import Decimal
     from pathlib import Path
 
+    from .fills_monitor import get_current_thresholds
     from .paper_fill_loop import run_paper_fill_testbed_loop
+
+    # Use auto-adjusted thresholds if available
+    cheap_price = Decimal(str(args.cheap_price))
+    window_seconds = int(args.window_seconds)
+
+    if args.use_monitor_thresholds:
+        monitored_price, monitored_window = get_current_thresholds()
+        cheap_price = monitored_price
+        window_seconds = monitored_window
 
     run_paper_fill_testbed_loop(
         data_dir=Path(args.data_dir),
         paper_dir=Path(args.paper_dir),
         snapshots_dir=Path(args.snapshots_dir),
         interval_seconds=float(args.interval_seconds),
-        window_seconds=int(args.window_seconds),
-        cheap_price=Decimal(str(args.cheap_price)),
+        window_seconds=window_seconds,
+        cheap_price=cheap_price,
         size=Decimal(str(args.size)),
         max_relaxation_steps=int(args.max_relaxation_steps),
     )
@@ -3409,6 +3419,7 @@ def main() -> None:
     pfl.add_argument("--cheap-price", type=float, default=0.15, help="Starting cheap price threshold (default: 0.15)")
     pfl.add_argument("--size", type=float, default=1.0, help="Position size cap (default: 1)")
     pfl.add_argument("--max-relaxation-steps", type=int, default=5, help="Max threshold relaxation steps (default: 5)")
+    pfl.add_argument("--use-monitor-thresholds", action="store_true", help="Use auto-adjusted thresholds from fills monitor")
     pfl.set_defaults(func=cmd_paper_fill_loop)
 
     # Paper fill daily metric - one-line metric for monitoring
