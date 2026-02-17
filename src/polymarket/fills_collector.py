@@ -54,6 +54,111 @@ def _auth_headers(config) -> dict[str, str]:
     return headers
 
 
+def _mask_value(value: str | None, visible_chars: int = 4) -> str:
+    """Mask a sensitive value for logging, showing only last N characters.
+
+    Args:
+        value: The value to mask
+        visible_chars: Number of characters to show at the end
+
+    Returns:
+        Masked string like "****abcd" or "<not set>" if empty
+    """
+    if not value:
+        return "<not set>"
+    if len(value) <= visible_chars:
+        return "****" + value[-visible_chars:] if len(value) > 0 else "<not set>"
+    return "****" + value[-visible_chars:]
+
+
+def validate_credentials(config) -> dict:
+    """Validate API credentials and return diagnostic info.
+
+    Args:
+        config: PolymarketConfig instance
+
+    Returns:
+        Dict with validation results and diagnostic information
+    """
+    result = {
+        "has_credentials": config.has_credentials,
+        "can_trade": config.can_trade,
+        "dry_run": config.dry_run,
+        "api_key": _mask_value(config.api_key),
+        "api_secret": _mask_value(config.api_secret),
+        "api_passphrase": _mask_value(config.api_passphrase),
+        "api_key_length": len(config.api_key) if config.api_key else 0,
+        "api_secret_length": len(config.api_secret) if config.api_secret else 0,
+        "api_passphrase_length": len(config.api_passphrase) if config.api_passphrase else 0,
+        "warnings": [],
+    }
+
+    # Check for partial credentials
+    has_any = bool(config.api_key or config.api_secret or config.api_passphrase)
+    has_all = config.has_credentials
+
+    if has_any and not has_all:
+        if not config.api_key:
+            result["warnings"].append("POLYMARKET_API_KEY is missing")
+        if not config.api_secret:
+            result["warnings"].append("POLYMARKET_API_SECRET is missing")
+        if not config.api_passphrase:
+            result["warnings"].append("POLYMARKET_API_PASSPHRASE is missing")
+
+    if not has_any:
+        result["warnings"].append("No API credentials configured. Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and POLYMARKET_API_PASSPHRASE environment variables.")
+
+    return result
+
+
+def check_api_auth(config) -> dict:
+    """Test API authentication with a simple request.
+
+    Args:
+        config: PolymarketConfig instance
+
+    Returns:
+        Dict with test results including any errors
+    """
+    result = {
+        "success": False,
+        "status_code": None,
+        "error": None,
+        "endpoint": None,
+    }
+
+    if not config.has_credentials:
+        result["error"] = "Cannot test auth: no credentials configured"
+        return result
+
+    try:
+        with _client() as client:
+            headers = _auth_headers(config)
+            # Try a simple authenticated endpoint first
+            # The /orders endpoint is commonly used for auth testing
+            result["endpoint"] = "/orders"
+            resp = client.get("/orders", params={"limit": 1}, headers=headers)
+            result["status_code"] = resp.status_code
+
+            if resp.status_code == 200:
+                result["success"] = True
+            elif resp.status_code == 401:
+                result["error"] = "Authentication failed: Invalid credentials"
+            elif resp.status_code == 403:
+                result["error"] = "Authorization failed: Insufficient permissions"
+            else:
+                result["error"] = f"Unexpected status code: {resp.status_code}"
+
+    except httpx.ConnectError as e:
+        result["error"] = f"Connection error: {e}"
+    except httpx.TimeoutException as e:
+        result["error"] = f"Timeout error: {e}"
+    except Exception as e:
+        result["error"] = f"Error testing auth: {e}"
+
+    return result
+
+
 def fetch_account_fills(
     since: datetime | None = None,
     limit: int = 100,
@@ -72,9 +177,33 @@ def fetch_account_fills(
     if config is None:
         config = load_config()
 
+    # Validate and log credentials status
+    validation = validate_credentials(config)
+    logger.info("API Credentials status: has_credentials=%s, can_trade=%s, dry_run=%s",
+                validation["has_credentials"], validation["can_trade"], validation["dry_run"])
+    logger.debug("API Key: %s (length: %d)",
+                 validation["api_key"], validation["api_key_length"])
+    logger.debug("API Secret: %s (length: %d)",
+                 validation["api_secret"], validation["api_secret_length"])
+    logger.debug("API Passphrase: %s (length: %d)",
+                 validation["api_passphrase"], validation["api_passphrase_length"])
+
+    for warning in validation["warnings"]:
+        logger.warning("Credential warning: %s", warning)
+
     if not config.has_credentials:
-        logger.debug("No API credentials configured, skipping account fills")
+        logger.warning("FILLS AUTH MISSING: No API credentials configured, skipping account fills. "
+                      "Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and POLYMARKET_API_PASSPHRASE.")
         return []
+
+    # Test auth before attempting to fetch fills
+    auth_test = check_api_auth(config)
+    if not auth_test["success"]:
+        logger.error("FILLS AUTH FAILED: API auth test failed - %s (status: %s, endpoint: %s)",
+                     auth_test["error"], auth_test["status_code"], auth_test["endpoint"])
+        return []
+
+    logger.info("API auth test passed, fetching fills from account")
 
     fills = []
     try:

@@ -6,16 +6,197 @@ import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import httpx
+import pytest
 
 from polymarket.fills_collector import (
+    _mask_value,
     append_fills,
+    check_api_auth,
     collect_fills,
     get_existing_tx_hashes,
     get_fills_summary,
     get_last_fill_timestamp,
     load_paper_fills,
+    validate_credentials,
 )
 from polymarket.pnl import Fill
+
+
+class TestMaskValue:
+    """Test credential masking."""
+
+    def test_mask_value_normal(self) -> None:
+        """Mask middle of value, show last 4 chars."""
+        assert _mask_value("abcdefghij", visible_chars=4) == "****ghij"
+
+    def test_mask_value_short(self) -> None:
+        """Handle short values."""
+        assert _mask_value("abc", visible_chars=4) == "****abc"
+
+    def test_mask_value_empty(self) -> None:
+        """Handle None/empty."""
+        assert _mask_value(None) == "<not set>"
+        assert _mask_value("") == "<not set>"
+
+    def test_mask_value_custom_visible(self) -> None:
+        """Custom visible character count."""
+        assert _mask_value("secret123", visible_chars=3) == "****123"
+
+
+class TestValidateCredentials:
+    """Test credential validation."""
+
+    def test_validate_credentials_complete(self) -> None:
+        """All credentials present."""
+        config = MagicMock()
+        config.api_key = "key123"
+        config.api_secret = "secret456"
+        config.api_passphrase = "passphrase789"
+        config.has_credentials = True
+        config.can_trade = True
+        config.dry_run = False
+
+        result = validate_credentials(config)
+
+        assert result["has_credentials"] is True
+        assert result["can_trade"] is True
+        assert result["dry_run"] is False
+        assert result["api_key"] == "****y123"
+        assert result["api_secret"] == "****t456"
+        assert result["api_passphrase"] == "****e789"
+        assert result["api_key_length"] == 6
+        assert result["api_secret_length"] == 9
+        assert result["api_passphrase_length"] == 13
+        assert result["warnings"] == []
+
+    def test_validate_credentials_missing_all(self) -> None:
+        """All credentials missing."""
+        config = MagicMock()
+        config.api_key = None
+        config.api_secret = None
+        config.api_passphrase = None
+        config.has_credentials = False
+        config.can_trade = False
+        config.dry_run = True
+
+        result = validate_credentials(config)
+
+        assert result["has_credentials"] is False
+        assert result["api_key"] == "<not set>"
+        assert result["api_secret"] == "<not set>"
+        assert result["api_passphrase"] == "<not set>"
+        assert len(result["warnings"]) == 1
+        assert "No API credentials configured" in result["warnings"][0]
+
+    def test_validate_credentials_partial(self) -> None:
+        """Some credentials missing."""
+        config = MagicMock()
+        config.api_key = "key123"
+        config.api_secret = None
+        config.api_passphrase = "passphrase"
+        config.has_credentials = False
+        config.can_trade = False
+        config.dry_run = True
+
+        result = validate_credentials(config)
+
+        assert result["has_credentials"] is False
+        assert len(result["warnings"]) == 1
+        assert "POLYMARKET_API_SECRET is missing" in result["warnings"][0]
+
+
+class TestCheckApiAuth:
+    """Test API auth testing."""
+
+    def test_check_api_auth_no_credentials(self) -> None:
+        """Return early if no credentials."""
+        config = MagicMock()
+        config.has_credentials = False
+
+        result = check_api_auth(config)
+
+        assert result["success"] is False
+        assert result["error"] == "Cannot test auth: no credentials configured"
+
+    def test_check_api_auth_success(self) -> None:
+        """Successful auth test."""
+        config = MagicMock()
+        config.has_credentials = True
+        config.api_key = "key"
+        config.api_passphrase = "pass"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+
+        with patch("httpx.Client.get", return_value=mock_response):
+            result = check_api_auth(config)
+
+        assert result["success"] is True
+        assert result["status_code"] == 200
+        assert result["endpoint"] == "/orders"
+
+    def test_check_api_auth_401(self) -> None:
+        """Auth failure (invalid credentials)."""
+        config = MagicMock()
+        config.has_credentials = True
+        config.api_key = "key"
+        config.api_passphrase = "pass"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+
+        with patch("httpx.Client.get", return_value=mock_response):
+            result = check_api_auth(config)
+
+        assert result["success"] is False
+        assert result["status_code"] == 401
+        assert "Invalid credentials" in result["error"]
+
+    def test_check_api_auth_403(self) -> None:
+        """Auth failure (insufficient permissions)."""
+        config = MagicMock()
+        config.has_credentials = True
+        config.api_key = "key"
+        config.api_passphrase = "pass"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 403
+
+        with patch("httpx.Client.get", return_value=mock_response):
+            result = check_api_auth(config)
+
+        assert result["success"] is False
+        assert result["status_code"] == 403
+        assert "Insufficient permissions" in result["error"]
+
+    def test_check_api_auth_connection_error(self) -> None:
+        """Connection error handling."""
+        config = MagicMock()
+        config.has_credentials = True
+        config.api_key = "key"
+        config.api_passphrase = "pass"
+
+        with patch("httpx.Client.get", side_effect=httpx.ConnectError("Connection refused")):
+            result = check_api_auth(config)
+
+        assert result["success"] is False
+        assert "Connection error" in result["error"]
+
+    def test_check_api_auth_timeout(self) -> None:
+        """Timeout error handling."""
+        config = MagicMock()
+        config.has_credentials = True
+        config.api_key = "key"
+        config.api_passphrase = "pass"
+
+        with patch("httpx.Client.get", side_effect=httpx.TimeoutException("Timeout")):
+            result = check_api_auth(config)
+
+        assert result["success"] is False
+        assert "Timeout error" in result["error"]
 
 
 class TestFillPersistence:
