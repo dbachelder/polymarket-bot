@@ -1,9 +1,9 @@
 """Fills monitor - ensures continuous paper trading activity with auto-adjustment.
 
 This module provides:
-1. Monitoring of fills.jsonl for staleness (>6h without new fills)
+1. Monitoring of fills.jsonl for staleness (>12h without new fills)
 2. Alert generation when fills stall
-3. Auto-adjustment of strategy thresholds to increase hit rate
+3. Auto-adjustment of strategy thresholds to increase hit rate (10% reduction, bounded at 50%)
 4. Bounded adjustments to prevent runaway threshold changes
 """
 
@@ -23,12 +23,16 @@ DEFAULT_FILLS_PATH = Path("data/fills.jsonl")
 DEFAULT_STATE_PATH = Path("data/paper_trading/fills_monitor_state.json")
 
 # Configurable thresholds
-STALE_HOURS = 6  # Consider fills stale after 6 hours
+STALE_HOURS = 12  # Consider fills stale after 12 hours (was 6)
 MIN_CHEAP_PRICE = Decimal("0.01")  # Don't go below 1 cent
-MAX_CHEAP_PRICE = Decimal("0.25")  # Don't go above 25 cents (loosened to ensure daily paper fills)
+MAX_CHEAP_PRICE = Decimal("0.25")  # Don't go above 25 cents
 MIN_WINDOW_SECONDS = 60  # Minimum 1 minute window
-MAX_WINDOW_SECONDS = 600  # Maximum 10 minute window
-ADJUSTMENT_FACTOR = Decimal("1.5")  # Multiply by this when adjusting
+MAX_WINDOW_SECONDS = 1800  # Maximum 30 minute window (was 600)
+
+# New 10% reduction adjustment (bounded at 50% of original)
+ADJUSTMENT_REDUCTION_PCT = Decimal("0.10")  # Reduce by 10% each adjustment
+MIN_CHEAP_PRICE_BOUND = Decimal("0.025")  # 50% of default 0.05
+MIN_WINDOW_BOUND = 150  # 50% of default 300
 
 
 @dataclass
@@ -42,6 +46,8 @@ class FillsMonitorState:
     current_window_seconds: int = 300
     alerts_triggered: int = 0
     total_fills_seen: int = 0
+    original_cheap_price: Decimal = Decimal("0.05")  # Track original for bounds
+    original_window_seconds: int = 300  # Track original for bounds
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -52,6 +58,8 @@ class FillsMonitorState:
             "current_window_seconds": self.current_window_seconds,
             "alerts_triggered": self.alerts_triggered,
             "total_fills_seen": self.total_fills_seen,
+            "original_cheap_price": str(self.original_cheap_price),
+            "original_window_seconds": self.original_window_seconds,
         }
 
     @classmethod
@@ -64,6 +72,8 @@ class FillsMonitorState:
             current_window_seconds=data.get("current_window_seconds", 300),
             alerts_triggered=data.get("alerts_triggered", 0),
             total_fills_seen=data.get("total_fills_seen", 0),
+            original_cheap_price=Decimal(str(data.get("original_cheap_price", "0.05"))),
+            original_window_seconds=data.get("original_window_seconds", 300),
         )
 
 
@@ -207,50 +217,60 @@ def auto_adjust_thresholds(
     current_cheap_price: Decimal,
     current_window: int,
     adjustment_count: int,
+    original_cheap_price: Decimal,
+    original_window: int,
 ) -> tuple[Decimal, int, bool]:
-    """Auto-adjust thresholds to increase hit rate.
+    """Auto-adjust thresholds to increase hit rate by reducing requirements.
+
+    Implements 10% reduction per adjustment, bounded at 50% of original values.
 
     Args:
         current_cheap_price: Current cheap price threshold
         current_window: Current window in seconds
         adjustment_count: Number of adjustments already made
+        original_cheap_price: Original cheap price (for bounds calculation)
+        original_window: Original window (for bounds calculation)
 
     Returns:
         Tuple of (new_cheap_price, new_window, was_adjusted)
     """
-    # Don't adjust if we've already adjusted too much
-    if adjustment_count >= 3:
+    # Calculate bounds (50% of original)
+    min_price_bound = original_cheap_price * Decimal("0.50")
+    min_window_bound = int(original_window * 0.50)
+
+    # Calculate new values (reduce by 10% from current)
+    new_cheap_price = current_cheap_price * (Decimal("1") - ADJUSTMENT_REDUCTION_PCT)
+    new_window = int(current_window * (1 - float(ADJUSTMENT_REDUCTION_PCT)))
+
+    # Apply bounds
+    new_cheap_price = max(new_cheap_price, min_price_bound)
+    new_window = max(new_window, min_window_bound)
+
+    # Check if we're at bounds (no change possible)
+    at_price_bound = new_cheap_price >= current_cheap_price
+    at_window_bound = new_window >= current_window
+
+    if at_price_bound and at_window_bound:
         logger.warning(
-            "Max adjustments reached (%d), not adjusting further",
-            adjustment_count,
+            "At minimum thresholds (50%% of original), cannot adjust further. "
+            "price=%s (min=%s), window=%d (min=%d)",
+            current_cheap_price,
+            min_price_bound,
+            current_window,
+            min_window_bound,
         )
         return current_cheap_price, current_window, False
 
-    # Calculate new values
-    new_cheap_price = min(
-        current_cheap_price * ADJUSTMENT_FACTOR,
-        MAX_CHEAP_PRICE,
-    )
-    new_window = min(
-        int(current_window * float(ADJUSTMENT_FACTOR)),
-        MAX_WINDOW_SECONDS,
-    )
-
-    # Check if we're at bounds
-    at_price_bound = new_cheap_price == current_cheap_price == MAX_CHEAP_PRICE
-    at_window_bound = new_window == current_window == MAX_WINDOW_SECONDS
-
-    if at_price_bound and at_window_bound:
-        logger.warning("At maximum thresholds, cannot adjust further")
-        return current_cheap_price, current_window, False
-
     logger.info(
-        "Auto-adjusting thresholds: price %s -> %s, window %d -> %d (adj #%d)",
+        "Auto-adjusting thresholds (adj #%d): price %s -> %s, window %d -> %d "
+        "(bounds: price >= %s, window >= %d)",
+        adjustment_count + 1,
         current_cheap_price,
         new_cheap_price,
         current_window,
         new_window,
-        adjustment_count + 1,
+        min_price_bound,
+        min_window_bound,
     )
 
     return new_cheap_price, new_window, True
@@ -275,6 +295,11 @@ def run_fills_monitor(
     """
     now = datetime.now(UTC)
     state = load_state(state_path)
+
+    # Initialize original values on first run
+    if state.adjustment_count == 0 and state.current_cheap_price == Decimal("0.05"):
+        state.original_cheap_price = Decimal("0.05")
+        state.original_window_seconds = 300
 
     # Check health
     health = check_fills_health(fills_path, stale_hours)
@@ -310,6 +335,8 @@ def run_fills_monitor(
                 state.current_cheap_price,
                 state.current_window_seconds,
                 state.adjustment_count,
+                state.original_cheap_price,
+                state.original_window_seconds,
             )
 
             if was_adjusted:
