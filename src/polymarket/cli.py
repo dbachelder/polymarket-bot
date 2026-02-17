@@ -2546,8 +2546,8 @@ def main() -> None:
     ph.add_argument(
         "--max-fills-age",
         type=float,
-        default=86400.0,
-        help="Max fills age in seconds (default: 86400 = 24h)",
+        default=259200.0,
+        help="Max fills age in seconds (default: 259200 = 72h)",
     )
     ph.add_argument(
         "--max-pnl-age",

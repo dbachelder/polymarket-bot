@@ -180,7 +180,7 @@ def run_pnl_verification(
 
 def pnl_health_check(
     data_dir: Path | None = None,
-    max_fills_age_seconds: float = 86400.0,  # 24 hours
+    max_fills_age_seconds: float = 259200.0,  # 72 hours
     max_pnl_age_seconds: float = 86400.0,  # 24 hours
 ) -> dict:
     """Check health of fills and PnL data.
