@@ -25,6 +25,10 @@ from .pnl import Fill
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+
+class AuthenticationError(Exception):
+    """Raised when API authentication fails or credentials are missing."""
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_FILLS_PATH = Path("data/fills.jsonl")
@@ -175,20 +179,23 @@ def fetch_account_fills(
 
     Returns:
         List of Fill objects from account history
+
+    Raises:
+        AuthenticationError: If API credentials are missing or invalid.
     """
     if config is None:
         config = load_config()
 
     if not config.has_credentials:
-        logger.error(
-            "FILLS AUTH FAILED: No API credentials configured. "
-            "Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and POLYMARKET_API_PASSPHRASE. "
-            "Key present: %s, Secret present: %s, Passphrase present: %s",
-            bool(config.api_key),
-            bool(config.api_secret),
-            bool(config.api_passphrase),
+        msg = (
+            f"FILLS AUTH FAILED: No API credentials configured. "
+            f"Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and POLYMARKET_API_PASSPHRASE. "
+            f"Key present: {bool(config.api_key)}, "
+            f"Secret present: {bool(config.api_secret)}, "
+            f"Passphrase present: {bool(config.api_passphrase)}"
         )
-        return []
+        logger.error(msg)
+        raise AuthenticationError(msg)
 
     fills = []
     try:
@@ -435,19 +442,21 @@ def collect_fills(
 
     all_fills = []
 
-    # Log credential status for visibility
+    # Validate credentials before attempting to fetch account fills
     if include_account:
         config = load_config()
         if not config.has_credentials:
-            logger.error(
-                "COLLECT FILLS: Missing API credentials - "
-                "KEY:%s SECRET:%s PASSPHRASE:%s",
-                "yes" if config.api_key else "NO",
-                "yes" if config.api_secret else "NO",
-                "yes" if config.api_passphrase else "NO",
+            msg = (
+                f"COLLECT FILLS AUTH FAILED: Missing API credentials - "
+                f"KEY:{'yes' if config.api_key else 'NO'}, "
+                f"SECRET:{'yes' if config.api_secret else 'NO'}, "
+                f"PASSPHRASE:{'yes' if config.api_passphrase else 'NO'}. "
+                f"Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and "
+                f"POLYMARKET_API_PASSPHRASE environment variables."
             )
-        else:
-            logger.debug("COLLECT FILLS: API credentials present")
+            logger.error(msg)
+            raise AuthenticationError(msg)
+        logger.debug("COLLECT FILLS: API credentials present")
 
     # Fetch account fills
     if include_account:
@@ -459,6 +468,8 @@ def collect_fills(
                     continue
                 all_fills.append(fill)
             results["account_fills"] = len(account_fills)
+        except AuthenticationError:
+            raise  # Re-raise auth errors to fail fast
         except Exception as e:
             logger.exception("Error fetching account fills: %s", e)
 
