@@ -43,7 +43,29 @@ _NEXT_DATA_RE = re.compile(
 
 
 def fetch_predictions_page(slug: str = "5M") -> str:
-    url = f"https://polymarket.com/predictions/{slug}"
+    """Fetch a Polymarket hub page that contains a Next.js __NEXT_DATA__ payload.
+
+    Polymarket has moved some topic hubs off of the old /predictions/* routes.
+
+    Known mappings:
+      - Weather/climate hubs now live under /climate-science/*
+      - Crypto interval hubs have their own helper: fetch_crypto_interval_page()
+
+    Args:
+        slug: Historical slug used by older collectors (e.g. "5M", "weather").
+
+    Returns:
+        Raw HTML.
+    """
+
+    slug_norm = (slug or "").strip().lstrip("/")
+
+    # Topic hubs (weather, precipitation, etc) moved under /climate-science.
+    if slug_norm.lower() in {"weather", "precipitation", "climate", "climate-weather"}:
+        url = f"https://polymarket.com/climate-science/{slug_norm}"
+    else:
+        url = f"https://polymarket.com/predictions/{slug_norm}"
+
     r = httpx.get(url, timeout=30, headers={"User-Agent": "polymarket-bot/0.1"})
     r.raise_for_status()
     return r.text

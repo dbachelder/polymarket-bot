@@ -23,7 +23,9 @@ DEFAULT_DATA_DIR = Path("data")
 DEFAULT_FILLS_PATH = Path("data/fills.jsonl")
 DEFAULT_PAPER_FILLS_PATH = Path("data/paper_trading/fills.jsonl")
 DEFAULT_INTERVAL_SECONDS = 300.0  # 5 minutes
-DEFAULT_STALE_ALERT_HOURS = 6.0
+# 6h is too aggressive when the account is inactive; use 24h and rely on
+# auth-missing logging to catch real failures quickly.
+DEFAULT_STALE_ALERT_HOURS = 24.0
 
 
 def _send_openclaw_notification(message: str) -> None:

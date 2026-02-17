@@ -2459,8 +2459,8 @@ def main() -> None:
     cfl.add_argument(
         "--stale-alert-hours",
         type=float,
-        default=6.0,
-        help="Hours before triggering stale alert (default: 6)",
+        default=24.0,
+        help="Hours before triggering stale alert (default: 24)",
     )
     cfl.add_argument(
         "--lookback-hours",

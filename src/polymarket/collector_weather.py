@@ -37,12 +37,21 @@ def collect_weather_snapshot(out_dir: Path, *, max_markets: int = 15) -> Path:
 
     payload: dict[str, Any] = {
         "generated_at": datetime.now(UTC).isoformat(),
-        "source": {"predictions": {"url": "https://polymarket.com/predictions/weather"}},
+        "source": {
+            "predictions": {"url": "https://polymarket.com/climate-science/weather"}
+        },
         "count": 0,
         "markets": [],
     }
 
     def _iter_markets():
+        """Yield raw market dicts from the Next.js dehydrated payload.
+
+        Polymarket's climate/weather hub currently exposes markets under
+        pages[*].events[*].markets (not pages[*].results[*].markets like the old
+        /predictions/* pages).
+        """
+
         for q in dehydrated:
             state = q.get("state", {})
             data = state.get("data")
@@ -51,9 +60,16 @@ def collect_weather_snapshot(out_dir: Path, *, max_markets: int = 15) -> Path:
             pages = data.get("pages")
             if not isinstance(pages, list):
                 continue
+
             for p in pages:
+                # Old shape: pages[*].results[*].markets
                 for item in p.get("results") or []:
                     for m in item.get("markets") or []:
+                        yield m
+
+                # New shape: pages[*].events[*].markets
+                for ev in p.get("events") or []:
+                    for m in ev.get("markets") or []:
                         yield m
 
     seen_ids: set[str] = set()
