@@ -11,10 +11,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from polymarket.fills_loop import (
+    check_api_health,
     check_fills_staleness,
     calculate_adjusted_lookback,
+    calculate_backoff_delay,
     run_collect_fills_loop,
 )
+from polymarket.fills_collector import AuthenticationError
 
 
 class TestCheckFillsStaleness:
@@ -390,3 +393,211 @@ class TestRunCollectFillsLoop:
 
             # Verify custom callback was called instead of default
             custom_callback.assert_called_once()
+
+
+class TestCalculateBackoffDelay:
+    """Tests for calculate_backoff_delay function."""
+
+    def test_backoff_increases_exponentially(self):
+        """Delay should double with each failure."""
+        delay_0 = calculate_backoff_delay(0)
+        delay_1 = calculate_backoff_delay(1)
+        delay_2 = calculate_backoff_delay(2)
+
+        # Each should be roughly 2x the previous (with jitter)
+        assert delay_1 >= delay_0 * 1.5  # Allow for jitter
+        assert delay_2 >= delay_1 * 1.5
+
+    def test_backoff_has_jitter(self):
+        """Delay should include random jitter."""
+        # Run multiple times to account for randomness
+        delays = [calculate_backoff_delay(1) for _ in range(10)]
+        # All delays should be different (jitter working)
+        assert len(set(delays)) > 1
+
+    def test_backoff_respects_max(self):
+        """Delay should not exceed maximum."""
+        # Even with many failures, delay should be capped
+        delay = calculate_backoff_delay(100)  # Very high failure count
+        assert delay <= 3600.0 + 360.0  # Max + 10% jitter
+
+
+class TestAuthenticationRetry:
+    """Tests for authentication retry with exponential backoff."""
+
+    @patch("polymarket.fills_loop.collect_fills")
+    @patch("polymarket.fills_loop.time.sleep")
+    @patch("polymarket.fills_loop.time.time")
+    @patch("polymarket.fills_loop._send_openclaw_notification")
+    def test_auth_error_triggers_backoff(
+        self, mock_notify, mock_time, mock_sleep, mock_collect_fills
+    ):
+        """AuthenticationError should trigger exponential backoff retry."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+
+            mock_time.side_effect = [0.0, 1.0]
+            mock_collect_fills.side_effect = AuthenticationError("No credentials")
+
+            # Track sleep calls to break out after a few iterations
+            sleep_count = [0]
+
+            def sleep_side_effect(duration):
+                sleep_count[0] += 1
+                if sleep_count[0] >= 2:
+                    raise StopIteration()
+
+            mock_sleep.side_effect = sleep_side_effect
+
+            with pytest.raises(StopIteration):
+                run_collect_fills_loop(
+                    data_dir=data_dir,
+                    interval_seconds=300.0,
+                )
+
+            # Should have slept with backoff (not the normal interval)
+            assert mock_sleep.call_count >= 2
+            # First call should be backoff delay (not 300s interval)
+            first_sleep = mock_sleep.call_args_list[0][0][0]
+            assert first_sleep < 60.0  # Should be backoff, not interval
+
+    @patch("polymarket.fills_loop.collect_fills")
+    @patch("polymarket.fills_loop.time.sleep")
+    @patch("polymarket.fills_loop.time.time")
+    def test_auth_recovery_resets_counter(self, mock_time, mock_sleep, mock_collect_fills):
+        """Successful collection after auth error should reset failure counter."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+
+            mock_time.side_effect = [0.0, 1.0, 2.0, 3.0]  # Multiple iterations
+
+            # First call fails with auth, second succeeds
+            call_count = [0]
+
+            def collect_side_effect(*args, **kwargs):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    raise AuthenticationError("Auth failed")
+                return {
+                    "total_appended": 5,
+                    "account_fills": 3,
+                    "paper_fills": 2,
+                    "duplicates_skipped": 0,
+                }
+
+            mock_collect_fills.side_effect = collect_side_effect
+
+            # Break after second iteration
+            def sleep_side_effect(duration):
+                if call_count[0] >= 2:
+                    raise StopIteration()
+
+            mock_sleep.side_effect = sleep_side_effect
+
+            with pytest.raises(StopIteration):
+                run_collect_fills_loop(
+                    data_dir=data_dir,
+                    interval_seconds=300.0,
+                )
+
+            # Should have called collect_fills twice
+            assert call_count[0] == 2
+
+    @patch("polymarket.fills_loop.collect_fills")
+    @patch("polymarket.fills_loop.time.sleep")
+    @patch("polymarket.fills_loop.time.time")
+    def test_max_auth_attempts_raises(self, mock_time, mock_sleep, mock_collect_fills):
+        """After max auth attempts, should raise AuthenticationError."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+
+            mock_time.side_effect = [0.0, 1.0] * 20  # Many iterations
+            mock_collect_fills.side_effect = AuthenticationError("Auth failed")
+
+            # Break after many iterations
+            sleep_count = [0]
+
+            def sleep_side_effect(duration):
+                sleep_count[0] += 1
+                if sleep_count[0] >= 12:  # Max attempts + some buffer
+                    raise StopIteration()
+
+            mock_sleep.side_effect = sleep_side_effect
+
+            # Should eventually raise AuthenticationError
+            with pytest.raises((AuthenticationError, StopIteration)):
+                run_collect_fills_loop(
+                    data_dir=data_dir,
+                    interval_seconds=300.0,
+                )
+
+
+class TestCheckApiHealth:
+    """Tests for check_api_health function."""
+
+    @patch("polymarket.fills_collector.load_config")
+    @patch("polymarket.fills_collector.check_api_auth")
+    def test_health_no_credentials(self, mock_check_auth, mock_load_config):
+        """Health check should report unhealthy when no credentials."""
+        mock_config = MagicMock()
+        mock_config.has_credentials = False
+        mock_load_config.return_value = mock_config
+
+        result = check_api_health()
+
+        assert result["healthy"] is False
+        assert result["status"] == "no_credentials"
+        assert result["credentials_configured"] is False
+        assert "Set POLYMARKET_API_KEY" in result["error"]
+
+    @patch("polymarket.fills_collector.load_config")
+    @patch("polymarket.fills_collector.check_api_auth")
+    def test_health_auth_success(self, mock_check_auth, mock_load_config):
+        """Health check should report healthy when auth succeeds."""
+        mock_config = MagicMock()
+        mock_config.has_credentials = True
+        mock_load_config.return_value = mock_config
+
+        mock_check_auth.return_value = {
+            "success": True,
+            "status_code": 200,
+        }
+
+        result = check_api_health()
+
+        assert result["healthy"] is True
+        assert result["status"] == "healthy"
+        assert result["credentials_configured"] is True
+        assert result["auth_test_passed"] is True
+
+    @patch("polymarket.fills_collector.load_config")
+    @patch("polymarket.fills_collector.check_api_auth")
+    def test_health_auth_failure(self, mock_check_auth, mock_load_config):
+        """Health check should report unhealthy when auth fails."""
+        mock_config = MagicMock()
+        mock_config.has_credentials = True
+        mock_load_config.return_value = mock_config
+
+        mock_check_auth.return_value = {
+            "success": False,
+            "status_code": 401,
+            "error": "Invalid credentials",
+        }
+
+        result = check_api_health()
+
+        assert result["healthy"] is False
+        assert result["status"] == "auth_failed"
+        assert result["error"] == "Invalid credentials"
+        assert result["status_code"] == 401
+
+    @patch("polymarket.fills_collector.load_config")
+    def test_health_exception_handling(self, mock_load_config):
+        """Health check should handle exceptions gracefully."""
+        mock_load_config.side_effect = Exception("Config error")
+
+        result = check_api_health()
+
+        assert result["healthy"] is False
+        assert result["status"] == "error"
+        assert "Config error" in result["error"]

@@ -32,6 +32,12 @@ WIDEN_FACTOR = 1.15  # 15% increase per adjustment
 WIDEN_JITTER = 0.05  # +/- 5% jitter
 MAX_LOOKBACK_MULTIPLIER = 3.0  # Max 3x original lookback
 
+# Exponential backoff for auth failures
+AUTH_RETRY_BASE_SECONDS = 30.0  # Start with 30 seconds
+AUTH_RETRY_MAX_SECONDS = 3600.0  # Max 1 hour backoff
+AUTH_RETRY_MULTIPLIER = 2.0  # Double each time
+AUTH_RETRY_MAX_ATTEMPTS = 10  # Max attempts before giving up
+
 
 def _send_openclaw_notification(message: str) -> None:
     """Emit OpenClaw notification via gateway if available.
@@ -46,6 +52,62 @@ def _send_openclaw_notification(message: str) -> None:
     except Exception:
         # Fallback: just log prominently
         logger.warning("[OpenClaw Notification] %s", message)
+
+
+def check_api_health() -> dict:
+    """Check Polymarket API health by testing authentication.
+
+    Performs an explicit API test to verify:
+    - Credentials are configured
+    - API authentication is working
+    - API endpoints are reachable
+
+    Returns:
+        Dict with health status and diagnostic information
+    """
+    from .fills_collector import check_api_auth, load_config
+
+    result = {
+        "healthy": False,
+        "status": "unknown",
+        "credentials_configured": False,
+        "auth_test_passed": False,
+        "error": None,
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+
+    try:
+        config = load_config()
+
+        # Check credentials
+        result["credentials_configured"] = config.has_credentials
+        if not config.has_credentials:
+            result["status"] = "no_credentials"
+            result["error"] = (
+                "API credentials not configured. "
+                "Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, "
+                "and POLYMARKET_API_PASSPHRASE environment variables."
+            )
+            return result
+
+        # Test API authentication
+        auth_result = check_api_auth(config)
+        result["auth_test"] = auth_result
+
+        if auth_result.get("success"):
+            result["healthy"] = True
+            result["status"] = "healthy"
+            result["auth_test_passed"] = True
+        else:
+            result["status"] = "auth_failed"
+            result["error"] = auth_result.get("error", "Unknown auth error")
+            result["status_code"] = auth_result.get("status_code")
+
+    except Exception as e:
+        result["status"] = "error"
+        result["error"] = f"Health check failed: {e}"
+
+    return result
 
 
 def check_fills_staleness(
@@ -126,6 +188,22 @@ def calculate_adjusted_lookback(
     return adjusted_lookback, was_adjusted
 
 
+def calculate_backoff_delay(consecutive_auth_failures: int) -> float:
+    """Calculate exponential backoff delay for auth failures.
+
+    Args:
+        consecutive_auth_failures: Number of consecutive auth failures
+
+    Returns:
+        Delay in seconds before next retry
+    """
+    delay = AUTH_RETRY_BASE_SECONDS * (AUTH_RETRY_MULTIPLIER ** consecutive_auth_failures)
+    delay = min(delay, AUTH_RETRY_MAX_SECONDS)
+    # Add jitter to avoid thundering herd
+    jitter = random.uniform(0.0, delay * 0.1)
+    return delay + jitter
+
+
 def run_collect_fills_loop(
     data_dir: Path | None = None,
     fills_path: Path | None = None,
@@ -141,6 +219,8 @@ def run_collect_fills_loop(
 
     Automatically widens collection thresholds if no fills received for
     extended periods (stale detection with auto-adjust).
+
+    On auth failure, retries with exponential backoff instead of exiting.
 
     Args:
         data_dir: Base data directory
@@ -168,6 +248,9 @@ def run_collect_fills_loop(
     original_lookback = float(lookback_hours)
     current_lookback = original_lookback
     last_fill_at: datetime | None = None
+
+    # Track auth failures for exponential backoff
+    consecutive_auth_failures = 0
 
     logger.info(
         "Starting collect-fills loop: interval=%.0fs lookback=%.0fh account=%s paper=%s",
@@ -212,6 +295,14 @@ def run_collect_fills_loop(
                 include_paper=include_paper,
                 lookback_hours=current_lookback,
             )
+
+            # Reset auth failure counter on successful collection
+            if consecutive_auth_failures > 0:
+                logger.info(
+                    "Auth recovered after %d failures - resuming normal operation",
+                    consecutive_auth_failures,
+                )
+                consecutive_auth_failures = 0
 
             # Log collection results
             logger.info(
@@ -272,24 +363,53 @@ def run_collect_fills_loop(
                     _send_openclaw_notification(notification)
 
         except AuthenticationError as e:
-            # Authentication errors are fatal - log critical and exit
-            logger.critical(
-                "AUTHENTICATION FAILED in iteration %d: %s. "
-                "Fill collection cannot continue without valid API credentials. "
-                "Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and "
-                "POLYMARKET_API_PASSPHRASE environment variables.",
-                iteration,
-                e,
-            )
-            # Send notification about auth failure
-            try:
-                _send_openclaw_notification(
-                    "🚨 Polymarket fills loop STOPPED: Authentication failed. "
-                    "Check API credentials (POLYMARKET_API_KEY, etc.)."
+            consecutive_auth_failures += 1
+
+            if consecutive_auth_failures >= AUTH_RETRY_MAX_ATTEMPTS:
+                logger.critical(
+                    "AUTHENTICATION FAILED after %d attempts: %s. "
+                    "Fill collection cannot continue without valid API credentials. "
+                    "Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and "
+                    "POLYMARKET_API_PASSPHRASE environment variables.",
+                    consecutive_auth_failures,
+                    e,
                 )
-            except Exception:
-                pass  # Notification is best-effort
-            raise  # Exit the loop
+                # Send notification about auth failure
+                try:
+                    _send_openclaw_notification(
+                        f"🚨 Polymarket fills loop STOPPED: Authentication failed after "
+                        f"{consecutive_auth_failures} attempts. Check API credentials."
+                    )
+                except Exception:
+                    pass  # Notification is best-effort
+                raise  # Exit the loop after max attempts
+
+            # Calculate backoff delay
+            backoff_delay = calculate_backoff_delay(consecutive_auth_failures - 1)
+
+            logger.error(
+                "AUTHENTICATION FAILED in iteration %d (attempt %d/%d): %s. "
+                "Retrying in %.1f seconds...",
+                iteration,
+                consecutive_auth_failures,
+                AUTH_RETRY_MAX_ATTEMPTS,
+                e,
+                backoff_delay,
+            )
+
+            # Send notification about auth retry (only on first few failures)
+            if consecutive_auth_failures <= 3:
+                try:
+                    _send_openclaw_notification(
+                        f"⚠️ Polymarket fills auth failed (attempt {consecutive_auth_failures}/"
+                        f"{AUTH_RETRY_MAX_ATTEMPTS}). Retrying in {int(backoff_delay)}s..."
+                    )
+                except Exception:
+                    pass  # Notification is best-effort
+
+            # Sleep with backoff before retrying
+            time.sleep(backoff_delay)
+            continue  # Skip normal sleep and continue to next iteration
 
         except Exception:
             logger.exception("Error in collect-fills loop iteration %d", iteration)
