@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .fills_collector import collect_fills, get_fills_summary
+from .fills_collector import AuthenticationError, collect_fills, get_fills_summary
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -270,6 +270,26 @@ def run_collect_fills_loop(
                     on_stale_alert(notification)
                 else:
                     _send_openclaw_notification(notification)
+
+        except AuthenticationError as e:
+            # Authentication errors are fatal - log critical and exit
+            logger.critical(
+                "AUTHENTICATION FAILED in iteration %d: %s. "
+                "Fill collection cannot continue without valid API credentials. "
+                "Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and "
+                "POLYMARKET_API_PASSPHRASE environment variables.",
+                iteration,
+                e,
+            )
+            # Send notification about auth failure
+            try:
+                _send_openclaw_notification(
+                    "🚨 Polymarket fills loop STOPPED: Authentication failed. "
+                    "Check API credentials (POLYMARKET_API_KEY, etc.)."
+                )
+            except Exception:
+                pass  # Notification is best-effort
+            raise  # Exit the loop
 
         except Exception:
             logger.exception("Error in collect-fills loop iteration %d", iteration)
