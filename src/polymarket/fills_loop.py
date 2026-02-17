@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import random
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -24,6 +25,12 @@ DEFAULT_FILLS_PATH = Path("data/fills.jsonl")
 DEFAULT_PAPER_FILLS_PATH = Path("data/paper_trading/fills.jsonl")
 DEFAULT_INTERVAL_SECONDS = 300.0  # 5 minutes
 DEFAULT_STALE_ALERT_HOURS = 6.0
+
+# Auto-widening thresholds for stale fills
+STALE_THRESHOLD_HOURS = 6.0  # Time without fills before considering stale
+WIDEN_FACTOR = 1.15  # 15% increase per adjustment
+WIDEN_JITTER = 0.05  # +/- 5% jitter
+MAX_LOOKBACK_MULTIPLIER = 3.0  # Max 3x original lookback
 
 
 def _send_openclaw_notification(message: str) -> None:
@@ -75,6 +82,50 @@ def check_fills_staleness(
     return result
 
 
+def calculate_adjusted_lookback(
+    last_fill_at: datetime | None,
+    current_lookback_hours: float,
+    original_lookback_hours: float,
+) -> tuple[float, bool]:
+    """Calculate adjusted lookback hours based on staleness.
+
+    If no fills in STALE_THRESHOLD_HOURS, auto-widen lookback by WIDEN_FACTOR
+    (with jitter). Bounded at MAX_LOOKBACK_MULTIPLIER * original.
+
+    Args:
+        last_fill_at: Timestamp of last fill, or None
+        current_lookback_hours: Current lookback window in hours
+        original_lookback_hours: Original/base lookback window in hours
+
+    Returns:
+        Tuple of (adjusted_lookback_hours, was_adjusted)
+    """
+    now = datetime.now(UTC)
+
+    # Check if we have no fills or fills are stale
+    if last_fill_at is None:
+        # No fills yet, use current lookback
+        return current_lookback_hours, False
+
+    hours_since_last_fill = (now - last_fill_at).total_seconds() / 3600
+
+    # If not stale, keep current lookback
+    if hours_since_last_fill <= STALE_THRESHOLD_HOURS:
+        return current_lookback_hours, False
+
+    # Stale: calculate widened lookback with jitter
+    jitter = random.uniform(-WIDEN_JITTER, WIDEN_JITTER)
+    adjustment_factor = WIDEN_FACTOR + jitter
+    new_lookback = current_lookback_hours * adjustment_factor
+
+    # Apply upper bound
+    max_lookback = original_lookback_hours * MAX_LOOKBACK_MULTIPLIER
+    adjusted_lookback = min(new_lookback, max_lookback)
+
+    was_adjusted = adjusted_lookback > current_lookback_hours
+    return adjusted_lookback, was_adjusted
+
+
 def run_collect_fills_loop(
     data_dir: Path | None = None,
     fills_path: Path | None = None,
@@ -87,6 +138,9 @@ def run_collect_fills_loop(
     on_stale_alert: Callable[[str], None] | None = None,
 ) -> None:
     """Run continuous fills collection loop.
+
+    Automatically widens collection thresholds if no fills received for
+    extended periods (stale detection with auto-adjust).
 
     Args:
         data_dir: Base data directory
@@ -110,6 +164,11 @@ def run_collect_fills_loop(
     fills_path = Path(fills_path)
     paper_fills_path = Path(paper_fills_path)
 
+    # Track lookback for auto-adjustment
+    original_lookback = float(lookback_hours)
+    current_lookback = original_lookback
+    last_fill_at: datetime | None = None
+
     logger.info(
         "Starting collect-fills loop: interval=%.0fs lookback=%.0fh account=%s paper=%s",
         interval_seconds,
@@ -124,6 +183,21 @@ def run_collect_fills_loop(
         iteration += 1
 
         try:
+            # Calculate adjusted lookback based on staleness
+            current_lookback, was_adjusted = calculate_adjusted_lookback(
+                last_fill_at=last_fill_at,
+                current_lookback_hours=current_lookback,
+                original_lookback_hours=original_lookback,
+            )
+
+            if was_adjusted:
+                logger.warning(
+                    "Auto-widening lookback: %.1fh (was %.1fh, original %.1fh)",
+                    current_lookback,
+                    current_lookback / WIDEN_FACTOR,
+                    original_lookback,
+                )
+
             # Collect fills
             logger.debug("Iteration %d: collecting fills...", iteration)
             collect_result = collect_fills(
@@ -131,7 +205,7 @@ def run_collect_fills_loop(
                 paper_fills_path=paper_fills_path,
                 include_account=include_account,
                 include_paper=include_paper,
-                lookback_hours=lookback_hours,
+                lookback_hours=current_lookback,
             )
 
             # Log collection results
@@ -143,18 +217,34 @@ def run_collect_fills_loop(
                 collect_result["duplicates_skipped"],
             )
 
+            # Reset lookback if we got new fills
+            if collect_result["total_appended"] > 0:
+                if current_lookback > original_lookback:
+                    logger.info(
+                        "Resetting lookback to %.1fh after successful fill",
+                        original_lookback,
+                    )
+                current_lookback = original_lookback
+                last_fill_at = datetime.now(UTC)
+            else:
+                # Update last_fill_at from file if available
+                summary = get_fills_summary(fills_path)
+                if summary.get("last_fill_at"):
+                    last_fill_at = datetime.fromisoformat(summary["last_fill_at"])
+
             # Check staleness
             staleness = check_fills_staleness(fills_path, stale_alert_hours)
 
             if staleness["age_hours"] is not None:
                 logger.info(
-                    "Fill age: %.2fh (threshold: %.1fh) fills=%d",
+                    "Fill age: %.2fh (threshold: %.1fh) fills=%d lookback=%.1fh",
                     staleness["age_hours"],
                     stale_alert_hours,
                     staleness["total_fills"],
+                    current_lookback,
                 )
             else:
-                logger.info("No fills found yet")
+                logger.info("No fills found yet (lookback=%.1fh)", current_lookback)
 
             # Alert if stale
             if staleness["is_stale"]:
