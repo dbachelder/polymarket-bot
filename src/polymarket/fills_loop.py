@@ -177,6 +177,11 @@ def run_collect_fills_loop(
         include_paper,
     )
 
+    # Run startup diagnostic to verify credentials
+    if include_account:
+        from .fills_collector import startup_diagnostic
+        startup_diagnostic()
+
     iteration = 0
     while True:
         started = time.time()

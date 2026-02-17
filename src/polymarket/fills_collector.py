@@ -180,7 +180,14 @@ def fetch_account_fills(
         config = load_config()
 
     if not config.has_credentials:
-        logger.debug("No API credentials configured, skipping account fills")
+        logger.error(
+            "FILLS AUTH FAILED: No API credentials configured. "
+            "Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and POLYMARKET_API_PASSPHRASE. "
+            "Key present: %s, Secret present: %s, Passphrase present: %s",
+            bool(config.api_key),
+            bool(config.api_secret),
+            bool(config.api_passphrase),
+        )
         return []
 
     fills = []
@@ -224,7 +231,11 @@ def fetch_account_fills(
                     elif resp.status_code == 404:
                         continue  # Try next endpoint
                     elif resp.status_code == 401:
-                        logger.warning("Authentication failed for %s", endpoint)
+                        logger.error(
+                            "FILLS AUTH FAILED: HTTP 401 from %s - invalid credentials. "
+                            "Check POLYMARKET_API_KEY, POLYMARKET_API_SECRET, POLYMARKET_API_PASSPHRASE",
+                            endpoint,
+                        )
                         break
                     else:
                         logger.warning("Unexpected status %d from %s", resp.status_code, endpoint)
@@ -232,6 +243,16 @@ def fetch_account_fills(
                 except httpx.HTTPError as e:
                     logger.warning("HTTP error fetching from %s: %s", endpoint, e)
                     continue
+
+            # Log when all endpoints tried but no fills found
+            if not fills:
+                logger.warning(
+                    "FILLS EMPTY: No fills found from any endpoint after trying %s. "
+                    "This could mean: (1) no trades in lookback period, (2) wrong endpoints, "
+                    "or (3) auth not working properly. since=%s",
+                    endpoints_to_try,
+                    since.isoformat() if since else "None",
+                )
 
     except Exception as e:
         logger.exception("Error fetching account fills: %s", e)
@@ -413,6 +434,20 @@ def collect_fills(
     }
 
     all_fills = []
+
+    # Log credential status for visibility
+    if include_account:
+        config = load_config()
+        if not config.has_credentials:
+            logger.error(
+                "COLLECT FILLS: Missing API credentials - "
+                "KEY:%s SECRET:%s PASSPHRASE:%s",
+                "yes" if config.api_key else "NO",
+                "yes" if config.api_secret else "NO",
+                "yes" if config.api_passphrase else "NO",
+            )
+        else:
+            logger.debug("COLLECT FILLS: API credentials present")
 
     # Fetch account fills
     if include_account:
