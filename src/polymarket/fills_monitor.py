@@ -25,9 +25,9 @@ DEFAULT_STATE_PATH = Path("data/paper_trading/fills_monitor_state.json")
 # Configurable thresholds
 STALE_HOURS = 6  # Consider fills stale after 6 hours
 MIN_CHEAP_PRICE = Decimal("0.01")  # Don't go below 1 cent
-MAX_CHEAP_PRICE = Decimal("0.25")  # Don't go above 25 cents (loosened to ensure daily paper fills)
+MAX_CHEAP_PRICE = Decimal("0.40")  # Don't go above 40 cents (paper fills > realism)
 MIN_WINDOW_SECONDS = 60  # Minimum 1 minute window
-MAX_WINDOW_SECONDS = 600  # Maximum 10 minute window
+MAX_WINDOW_SECONDS = 3600  # Maximum 60 minute window (ensures daily paper fills)
 ADJUSTMENT_FACTOR = Decimal("1.5")  # Multiply by this when adjusting
 
 
@@ -219,7 +219,7 @@ def auto_adjust_thresholds(
         Tuple of (new_cheap_price, new_window, was_adjusted)
     """
     # Don't adjust if we've already adjusted too much
-    if adjustment_count >= 3:
+    if adjustment_count >= 6:
         logger.warning(
             "Max adjustments reached (%d), not adjusting further",
             adjustment_count,
