@@ -21,3 +21,4 @@ data/
 
 # UV
 uv.lock
+.env
