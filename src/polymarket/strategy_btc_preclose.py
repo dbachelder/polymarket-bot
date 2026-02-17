@@ -140,6 +140,7 @@ def run_btc_preclose_paper(
             "fills_recorded": 0,
             "triggers": [],
             "near_close_log": [],
+            "near_misses": [],
             "error": "No recent snapshots found",
         }
 
@@ -165,22 +166,76 @@ def run_btc_preclose_paper(
     fills = 0
     triggers: list[dict[str, Any]] = []
     near_close_log: list[dict[str, Any]] = []
+    near_misses: list[dict[str, Any]] = []  # Track near-miss opportunities
 
     for m in markets:
         scanned += 1
+        market_slug = m.get("slug", "unknown")
+        
         try:
             end_dt = datetime.fromisoformat(str(m.get("end_date", "")).replace("Z", "+00:00"))
-        except Exception:
+        except Exception as e:
+            logger.debug("BTC preclose near-miss: %s - failed to parse end_date: %s", market_slug, e)
+            near_misses.append({
+                "market_slug": market_slug,
+                "reason": "parse_error",
+                "details": f"Failed to parse end_date: {e}",
+                "timestamp": now.isoformat(),
+            })
             continue
 
         ttc = (end_dt - now).total_seconds()
-        if ttc < 0 or ttc > float(window_seconds):
+        
+        # Debug: Log all markets and their time to close
+        if ttc > 0:
+            logger.debug(
+                "BTC preclose evaluating: %s ttc=%.0fs (window=%ds)",
+                market_slug, ttc, window_seconds
+            )
+        
+        if ttc < 0:
+            # Market already closed
+            logger.debug(
+                "BTC preclose near-miss: %s - market already closed (ttc=%.0fs)",
+                market_slug, ttc
+            )
+            near_misses.append({
+                "market_slug": market_slug,
+                "reason": "already_closed",
+                "time_to_close_seconds": round(ttc, 3),
+                "timestamp": now.isoformat(),
+            })
+            continue
+            
+        if ttc > float(window_seconds):
+            # Outside window
+            logger.debug(
+                "BTC preclose near-miss: %s - outside window (ttc=%.0fs > %ds)",
+                market_slug, ttc, window_seconds
+            )
+            near_misses.append({
+                "market_slug": market_slug,
+                "reason": "outside_window",
+                "time_to_close_seconds": round(ttc, 3),
+                "window_seconds": window_seconds,
+                "timestamp": now.isoformat(),
+            })
             continue
 
         near_close += 1
 
         token_ids = m.get("clob_token_ids", [])
         if len(token_ids) != 2:
+            logger.debug(
+                "BTC preclose near-miss: %s - invalid token_ids count: %d",
+                market_slug, len(token_ids)
+            )
+            near_misses.append({
+                "market_slug": market_slug,
+                "reason": "invalid_tokens",
+                "token_count": len(token_ids),
+                "timestamp": now.isoformat(),
+            })
             continue
             
         yes_id, no_id = token_ids[0], token_ids[1]
@@ -195,11 +250,12 @@ def run_btc_preclose_paper(
 
         # Log near-close detection with best asks for debugging
         near_close_entry = {
-            "market_slug": m.get("slug", "unknown"),
+            "market_slug": market_slug,
             "question": m.get("question", ""),
             "time_to_close_seconds": round(ttc, 3),
             "yes_ask": str(yes_ask) if yes_ask else None,
             "no_ask": str(no_ask) if no_ask else None,
+            "cheap_price": str(cheap_price),
             "timestamp": now.isoformat(),
         }
         near_close_log.append(near_close_entry)
@@ -209,7 +265,7 @@ def run_btc_preclose_paper(
         if verbose_tick:
             logger.info(
                 "BTC preclose tick: %s ttc=%.0fs yes_ask=%s no_ask=%s min_ask=%s cheap=%s fill=%s",
-                m.get("slug", "unknown"),
+                market_slug,
                 ttc,
                 yes_ask,
                 no_ask,
@@ -263,6 +319,31 @@ def run_btc_preclose_paper(
                 px,
                 ttc,
             )
+        else:
+            # Near-miss: within window but price too high
+            reason = "price_too_high"
+            if yes_ask is None and no_ask is None:
+                reason = "no_liquidity"
+            elif yes_ask is None:
+                reason = "no_yes_liquidity"
+            elif no_ask is None:
+                reason = "no_no_liquidity"
+            
+            logger.debug(
+                "BTC preclose near-miss: %s - %s (yes_ask=%s, no_ask=%s, cheap=%s)",
+                market_slug, reason, yes_ask, no_ask, cheap_price
+            )
+            near_misses.append({
+                "market_slug": market_slug,
+                "reason": reason,
+                "time_to_close_seconds": round(ttc, 3),
+                "yes_ask": str(yes_ask) if yes_ask else None,
+                "no_ask": str(no_ask) if no_ask else None,
+                "cheap_price": str(cheap_price),
+                "min_ask": str(min_ask) if min_ask < Decimal("1.0") else None,
+                "price_gap": str(min_ask - cheap_price) if min_ask < Decimal("1.0") else None,
+                "timestamp": now.isoformat(),
+            })
 
     # Log near-close detections for debugging
     logger.info(
@@ -273,6 +354,32 @@ def run_btc_preclose_paper(
         window_seconds,
         cheap_price,
     )
+    
+    # Log near-miss summary
+    if near_misses:
+        by_reason: dict[str, int] = {}
+        for nm in near_misses:
+            reason = nm["reason"]
+            by_reason[reason] = by_reason.get(reason, 0) + 1
+        
+        logger.info(
+            "BTC preclose near-miss summary: total=%d, by_reason=%s",
+            len(near_misses), by_reason
+        )
+        
+        # Log price_too_high misses with their gaps (for threshold tuning)
+        price_misses = [nm for nm in near_misses if nm["reason"] == "price_too_high"]
+        if price_misses:
+            gaps = [Decimal(nm["price_gap"]) for nm in price_misses if nm.get("price_gap")]
+            if gaps:
+                avg_gap = sum(gaps) / len(gaps)
+                min_gap = min(gaps)
+                logger.info(
+                    "BTC preclose price gaps: count=%d, avg=%s, min=%s - "
+                    "consider lowering cheap_price threshold",
+                    len(gaps), round(avg_gap, 4), round(min_gap, 4)
+                )
+    
     if near_close_log:
         for entry in near_close_log:  # Log ALL near-close markets
             logger.info(
@@ -293,6 +400,12 @@ def run_btc_preclose_paper(
         "fills_recorded": fills,
         "triggers": triggers,
         "near_close_log": near_close_log,
+        "near_misses": near_misses,
+        "near_miss_count": len(near_misses),
+        "near_miss_by_reason": {
+            reason: len([nm for nm in near_misses if nm["reason"] == reason])
+            for reason in set(nm["reason"] for nm in near_misses)
+        } if near_misses else {},
     }
 
 
@@ -335,6 +448,7 @@ def run_btc_preclose_loop(
     total_scanned = 0
     total_near_close = 0
     total_fills = 0
+    total_near_misses = 0
     iterations = 0
     
     logger.info(
@@ -357,6 +471,7 @@ def run_btc_preclose_loop(
         total_scanned += result["markets_scanned"]
         total_near_close += result["candidates_near_close"]
         total_fills += result["fills_recorded"]
+        total_near_misses += result.get("near_miss_count", 0)
         all_triggers.extend(result["triggers"])
         
         if result["fills_recorded"] > 0:
@@ -366,6 +481,15 @@ def run_btc_preclose_loop(
                 result["fills_recorded"],
             )
         
+        # Log near-miss info for debugging
+        if result.get("near_miss_count", 0) > 0:
+            logger.debug(
+                "Loop iteration %d: %d near-misses (by_reason: %s)",
+                iterations,
+                result["near_miss_count"],
+                result.get("near_miss_by_reason", {}),
+            )
+        
         # Sleep until next iteration
         next_run = datetime.now(UTC) + timedelta(seconds=interval_seconds)
         sleep_seconds = (next_run - datetime.now(UTC)).total_seconds()
@@ -373,6 +497,11 @@ def run_btc_preclose_loop(
             time.sleep(sleep_seconds)
         elif datetime.now(UTC) >= end_time:
             break
+
+    logger.info(
+        "BTC preclose loop complete: iterations=%d, fills=%d, near_misses=%d",
+        iterations, total_fills, total_near_misses
+    )
 
     return {
         "timestamp": start_time.isoformat(),
@@ -385,5 +514,6 @@ def run_btc_preclose_loop(
         "total_markets_scanned": total_scanned,
         "total_candidates_near_close": total_near_close,
         "total_fills_recorded": total_fills,
+        "total_near_misses": total_near_misses,
         "all_triggers": all_triggers,
     }
