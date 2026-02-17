@@ -20,7 +20,8 @@ PYTHON="$SCRIPT_DIR/.venv/bin/python"
 # Install/sync dependencies if needed
 if [[ ! -f ".venv/.deps-synced" ]] || [[ "pyproject.toml" -nt ".venv/.deps-synced" ]]; then
     echo "Installing dependencies..."
-    uv pip install -e .
+    # Install base + dev deps so ./run.sh tests works (pytest/ruff)
+    uv pip install -e ".[dev]"
     touch .venv/.deps-synced
 fi
 
