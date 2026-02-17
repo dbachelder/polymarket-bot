@@ -18,12 +18,15 @@ Features:
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
 from .pnl import Fill, OrderBook, PnLReport, PnLVerifier, load_orderbooks_from_snapshot
+
+logger = logging.getLogger(__name__)
 
 
 # Constants
@@ -254,9 +257,21 @@ class PaperTradingEngine:
             "transaction_hash": fill.transaction_hash,
         }
 
+        # Ensure directory exists
+        self.fills_path.parent.mkdir(parents=True, exist_ok=True)
+
         # Append as newline-delimited JSON
         with open(self.fills_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, sort_keys=True) + "\n")
+
+        logger.info(
+            "Recorded paper fill: %s %s @ %s size=%s to %s",
+            fill.side,
+            market_question or fill.market_slug or "unknown",
+            fill.price,
+            fill.size,
+            self.fills_path,
+        )
 
     def load_fills(self, since: str | None = None) -> list[Fill]:
         """Load fills from journal.

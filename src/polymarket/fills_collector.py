@@ -180,14 +180,7 @@ def fetch_account_fills(
         config = load_config()
 
     if not config.has_credentials:
-        logger.error(
-            "FILLS AUTH FAILED: No API credentials configured. "
-            "Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and POLYMARKET_API_PASSPHRASE. "
-            "Key present: %s, Secret present: %s, Passphrase present: %s",
-            bool(config.api_key),
-            bool(config.api_secret),
-            bool(config.api_passphrase),
-        )
+        logger.debug("No API credentials configured, skipping account fills")
         return []
 
     fills = []
@@ -231,11 +224,7 @@ def fetch_account_fills(
                     elif resp.status_code == 404:
                         continue  # Try next endpoint
                     elif resp.status_code == 401:
-                        logger.error(
-                            "FILLS AUTH FAILED: HTTP 401 from %s - invalid credentials. "
-                            "Check POLYMARKET_API_KEY, POLYMARKET_API_SECRET, POLYMARKET_API_PASSPHRASE",
-                            endpoint,
-                        )
+                        logger.warning("Authentication failed for %s", endpoint)
                         break
                     else:
                         logger.warning("Unexpected status %d from %s", resp.status_code, endpoint)
@@ -243,16 +232,6 @@ def fetch_account_fills(
                 except httpx.HTTPError as e:
                     logger.warning("HTTP error fetching from %s: %s", endpoint, e)
                     continue
-
-            # Log when all endpoints tried but no fills found
-            if not fills:
-                logger.warning(
-                    "FILLS EMPTY: No fills found from any endpoint after trying %s. "
-                    "This could mean: (1) no trades in lookback period, (2) wrong endpoints, "
-                    "or (3) auth not working properly. since=%s",
-                    endpoints_to_try,
-                    since.isoformat() if since else "None",
-                )
 
     except Exception as e:
         logger.exception("Error fetching account fills: %s", e)
@@ -272,26 +251,12 @@ def load_paper_fills(paper_fills_path: Path | None = None) -> list[Fill]:
     if paper_fills_path is None:
         paper_fills_path = DEFAULT_PAPER_FILLS_PATH
 
-    logger.debug("Loading paper fills from: %s", paper_fills_path)
-    logger.debug("Paper fills path exists: %s, is_file: %s", paper_fills_path.exists(), paper_fills_path.is_file() if paper_fills_path.exists() else False)
-
     if not paper_fills_path.exists():
-        logger.warning("PAPER FILLS: File not found at %s", paper_fills_path)
-        return []
-
-    # Check file size for debugging
-    file_size = paper_fills_path.stat().st_size
-    logger.debug("Paper fills file size: %d bytes", file_size)
-
-    if file_size == 0:
-        logger.warning("PAPER FILLS: File exists but is empty (0 bytes)")
         return []
 
     fills = []
-    line_count = 0
     with open(paper_fills_path, encoding="utf-8") as f:
         for line in f:
-            line_count += 1
             line = line.strip()
             if not line:
                 continue
@@ -303,7 +268,6 @@ def load_paper_fills(paper_fills_path: Path | None = None) -> list[Fill]:
                 logger.warning("Failed to parse paper fill: %s", e)
                 continue
 
-    logger.debug("PAPER FILLS: Read %d lines, parsed %d fills", line_count, len(fills))
     return fills
 
 
@@ -424,17 +388,26 @@ def collect_fills(
     """
     if fills_path is None:
         fills_path = DEFAULT_FILLS_PATH
-
-    logger.info("=" * 60)
-    logger.info("COLLECT FILLS START: include_account=%s include_paper=%s", include_account, include_paper)
-    logger.info("=" * 60)
+    if paper_fills_path is None:
+        paper_fills_path = DEFAULT_PAPER_FILLS_PATH
 
     # Ensure directory exists
     fills_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Log collection attempt with detailed parameters
+    logger.info(
+        "Starting fill collection: fills_path=%s, paper_fills_path=%s, "
+        "include_account=%s, include_paper=%s, lookback_hours=%.1f",
+        fills_path,
+        paper_fills_path,
+        include_account,
+        include_paper,
+        lookback_hours,
+    )
+
     # Get existing transaction hashes for deduplication
     existing_txs = get_existing_tx_hashes(fills_path)
-    logger.debug("Existing transaction hashes in fills.jsonl: %d", len(existing_txs))
+    logger.debug("Found %d existing transaction hashes in %s", len(existing_txs), fills_path)
 
     # Use fixed lookback window instead of since=last_fill to avoid missing fills
     # when last_fill timestamp is stale or there are clock/sync issues
@@ -455,55 +428,44 @@ def collect_fills(
 
     all_fills = []
 
-    # Log credential status for visibility
-    if include_account:
-        config = load_config()
-        if not config.has_credentials:
-            logger.error(
-                "COLLECT FILLS: Missing API credentials - "
-                "KEY:%s SECRET:%s PASSPHRASE:%s",
-                "yes" if config.api_key else "NO",
-                "yes" if config.api_secret else "NO",
-                "yes" if config.api_passphrase else "NO",
-            )
-        else:
-            logger.debug("COLLECT FILLS: API credentials present")
-
     # Fetch account fills
     if include_account:
-        logger.debug("Fetching account fills (since=%s)...", since.isoformat() if since else "None")
         try:
+            logger.debug("Fetching account fills since %s", since.isoformat() if since else "None")
             account_fills = fetch_account_fills(since=since)
-            logger.debug("Fetched %d raw account fills", len(account_fills))
+            logger.debug("Fetched %d account fills", len(account_fills))
             for fill in account_fills:
                 if fill.transaction_hash and fill.transaction_hash in existing_txs:
                     results["duplicates_skipped"] += 1
-                    logger.debug("Skipping duplicate fill: tx_hash=%s", fill.transaction_hash)
+                    logger.debug("Skipping duplicate account fill: %s", fill.transaction_hash[:16])
                     continue
                 all_fills.append(fill)
             results["account_fills"] = len(account_fills)
         except Exception as e:
             logger.exception("Error fetching account fills: %s", e)
-    else:
-        logger.debug("Skipping account fills (include_account=False)")
 
     # Load paper fills
     if include_paper:
-        logger.debug("Loading paper fills from: %s", paper_fills_path or DEFAULT_PAPER_FILLS_PATH)
         try:
+            paper_fills_path = paper_fills_path or DEFAULT_PAPER_FILLS_PATH
+            logger.debug("Loading paper fills from %s", paper_fills_path)
+            if not paper_fills_path.exists():
+                logger.warning(
+                    "Paper trading fills file not found: %s "
+                    "(paper trading may not be active or has not recorded any fills yet)",
+                    paper_fills_path,
+                )
             paper_fills = load_paper_fills(paper_fills_path)
-            logger.debug("Loaded %d raw paper fills", len(paper_fills))
+            logger.debug("Loaded %d paper fills", len(paper_fills))
             for fill in paper_fills:
                 if fill.transaction_hash and fill.transaction_hash in existing_txs:
                     results["duplicates_skipped"] += 1
-                    logger.debug("Skipping duplicate paper fill: tx_hash=%s", fill.transaction_hash)
+                    logger.debug("Skipping duplicate paper fill: %s", fill.transaction_hash[:16])
                     continue
                 all_fills.append(fill)
             results["paper_fills"] = len(paper_fills)
         except Exception as e:
             logger.exception("Error loading paper fills: %s", e)
-    else:
-        logger.debug("Skipping paper fills (include_paper=False)")
 
     # Sort by timestamp
     all_fills.sort(key=lambda f: f.timestamp)
@@ -512,15 +474,25 @@ def collect_fills(
     appended = append_fills(all_fills, fills_path)
     results["total_appended"] = appended
 
-    logger.info("=" * 60)
-    logger.info(
-        "COLLECT FILLS RESULT: %d appended (%d account raw, %d paper raw, %d dups skipped)",
-        appended,
-        results["account_fills"],
-        results["paper_fills"],
-        results["duplicates_skipped"],
-    )
-    logger.info("=" * 60)
+    # Log detailed summary
+    if appended == 0 and (results["account_fills"] == 0 and results["paper_fills"] == 0):
+        logger.warning(
+            "No fills collected from any source. "
+            "Account fills: %d, Paper fills: %d. "
+            "Check: (1) API credentials configured, "
+            "(2) Paper trading is actively generating fills, "
+            "(3) Market conditions match strategy criteria",
+            results["account_fills"],
+            results["paper_fills"],
+        )
+    else:
+        logger.info(
+            "Collected %d fills (%d account, %d paper, %d duplicates skipped)",
+            appended,
+            results["account_fills"],
+            results["paper_fills"],
+            results["duplicates_skipped"],
+        )
 
     return results
 
