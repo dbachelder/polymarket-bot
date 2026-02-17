@@ -1,7 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 
-PY=/home/dan/src/axiom-trader/.venv/bin/python
+# Ensure we run from the polymarket-bot directory so .env is found
+cd /home/dan/src/polymarket-bot
+
+# Use the correct Python from polymarket-bot's venv
+PY=/home/dan/src/polymarket-bot/.venv/bin/python
+
+# Load .env file explicitly if it exists (cron doesn't load it by default)
+if [ -f .env ]; then
+    set -a
+    source .env
+    set +a
+    echo "Loaded .env file"
+fi
 
 # Check for existing daily PnL files before running
 DAILY_FILES_BEFORE=$(find data/ -name "*daily*" -type f 2>/dev/null | wc -l)
