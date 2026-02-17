@@ -30,6 +30,37 @@ logger = logging.getLogger(__name__)
 DEFAULT_FILLS_PATH = Path("data/fills.jsonl")
 DEFAULT_PAPER_FILLS_PATH = Path("data/paper_trading/fills.jsonl")
 
+# Staleness threshold for fills data (hours)
+STALE_ALERT_HOURS = 6.0
+
+
+class EnvValidationError(Exception):
+    """Raised when required environment variables are missing or invalid."""
+
+    pass
+
+
+def validate_env() -> None:
+    """Validate required environment variables before collection loop.
+
+    Raises:
+        EnvValidationError: If required credentials are missing.
+    """
+    from .config import load_config
+
+    config = load_config()
+
+    # Validate credentials if account fills are expected
+    if not config.has_credentials:
+        msg = (
+            "Missing required Polymarket API credentials. "
+            "Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and "
+            "POLYMARKET_API_PASSPHRASE environment variables or in .env file."
+        )
+        raise EnvValidationError(msg)
+
+    logger.debug("Environment validation passed: API credentials present")
+
 
 def _client(timeout: float = 30.0) -> httpx.Client:
     """Create HTTP client for CLOB API."""
@@ -279,6 +310,10 @@ def collect_fills(
     Returns:
         Dict with collection results summary
     """
+    # Validate environment before entering collection (only when fetching account fills)
+    if include_account:
+        validate_env()
+
     if fills_path is None:
         fills_path = DEFAULT_FILLS_PATH
 
