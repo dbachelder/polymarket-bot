@@ -180,7 +180,16 @@ def run_collect_fills_loop(
     # Run startup diagnostic to verify credentials
     if include_account:
         from .fills_collector import startup_diagnostic
-        startup_diagnostic()
+        logger.warning("=" * 60)
+        logger.warning("STARTING FILLS COLLECTION LOOP - CREDENTIAL CHECK")
+        logger.warning("=" * 60)
+        diagnostic = startup_diagnostic()
+        if not diagnostic.get('api_auth_ok'):
+            logger.critical("FATAL: API authentication failed. Loop cannot continue.")
+            logger.critical("Actions required: %s", diagnostic.get('actions_required', []))
+            for action in diagnostic.get('actions_required', []):
+                logger.critical("  >> %s", action)
+            raise AuthenticationError("API credentials invalid or missing")
 
     iteration = 0
     last_heartbeat_time: float | None = None

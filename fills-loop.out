@@ -1,0 +1,146 @@
+CREDENTIALS MISSING: No API credentials configured
+  ACTION: API credentials are missing. Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and POLYMARKET_API_PASSPHRASE environment variables.
+  ACTION: Option 1: Export them directly: export POLYMARKET_API_KEY=xxx
+  ACTION: Option 2: Use 1Password: source ./scripts/load-env-from-1password.sh
+  ACTION: Option 3: Add them to .env file (never commit this file!)
+STEP 2: Skipping API auth test (no credentials)
+FILLS STALE: Last fill was 35.6h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 35.6h since last fill. Check collect-fills-loop service.
+Auto-widening lookback: 81.1h (was 70.5h, original 72.0h)
+FILLS STALE: Last fill was 35.7h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 35.7h since last fill. Check collect-fills-loop service.
+Auto-widening lookback: 96.0h (was 83.5h, original 72.0h)
+FILLS STALE: Last fill was 35.8h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 35.8h since last fill. Check collect-fills-loop service.
+Auto-widening lookback: 108.5h (was 94.3h, original 72.0h)
+FILLS STALE: Last fill was 35.9h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 35.9h since last fill. Check collect-fills-loop service.
+Auto-widening lookback: 122.2h (was 106.3h, original 72.0h)
+FILLS STALE: Last fill was 36.0h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 36.0h since last fill. Check collect-fills-loop service.
+Auto-widening lookback: 144.8h (was 125.9h, original 72.0h)
+FILLS STALE: Last fill was 36.1h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 36.1h since last fill. Check collect-fills-loop service.
+Auto-widening lookback: 165.3h (was 143.7h, original 72.0h)
+FILLS STALE: Last fill was 36.1h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 36.1h since last fill. Check collect-fills-loop service.
+Auto-widening lookback: 195.2h (was 169.7h, original 72.0h)
+FILLS STALE: Last fill was 36.2h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 36.2h since last fill. Check collect-fills-loop service.
+Auto-widening lookback: 216.0h (was 187.8h, original 72.0h)
+FILLS STALE: Last fill was 36.3h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 36.3h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 36.4h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 36.4h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 36.5h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 36.5h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 36.6h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 36.6h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 36.7h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 36.7h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 36.7h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 36.7h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 36.8h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 36.8h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 36.9h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 36.9h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 37.0h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 37.0h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 37.1h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 37.1h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 37.2h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 37.2h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 37.2h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 37.2h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 37.3h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 37.3h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 37.4h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 37.4h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 37.5h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 37.5h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 37.6h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 37.6h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 37.7h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 37.7h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 37.7h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 37.7h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 37.8h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 37.8h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 37.9h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 37.9h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 38.0h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 38.0h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 38.1h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 38.1h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 38.2h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 38.2h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 38.3h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 38.3h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 38.3h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 38.3h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 38.4h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 38.4h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 38.5h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 38.5h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 38.6h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 38.6h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 38.7h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 38.7h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 38.8h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 38.8h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 38.8h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 38.8h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 38.9h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 38.9h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 39.0h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 39.0h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 39.1h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 39.1h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 39.2h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 39.2h since last fill. Check collect-fills-loop service.
+FILLS STALE: Last fill was 39.3h ago (threshold: 24.0h). Total fills: 1
+[OpenClaw Notification] 🚨 Polymarket fills stale: 39.3h since last fill. Check collect-fills-loop service.
+Terminated
+CREDENTIALS MISSING: No API credentials configured
+  ACTION: API credentials are missing. Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and POLYMARKET_API_PASSPHRASE environment variables.
+  ACTION: Option 1: Export them directly: export POLYMARKET_API_KEY=xxx
+  ACTION: Option 2: Use 1Password: source ./scripts/load-env-from-1password.sh
+  ACTION: Option 3: Add them to .env file (never commit this file!)
+STEP 2: Skipping API auth test (no credentials)
+CREDENTIALS MISSING: No API credentials configured
+  ACTION: API credentials are missing. Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and POLYMARKET_API_PASSPHRASE environment variables.
+  ACTION: Option 1: Export them directly: export POLYMARKET_API_KEY=xxx
+  ACTION: Option 2: Use 1Password: source ./scripts/load-env-from-1password.sh
+  ACTION: Option 3: Add them to .env file (never commit this file!)
+STEP 2: Skipping API auth test (no credentials)
+COLLECT FILLS AUTH FAILED: Missing API credentials - KEY:NO, SECRET:NO, PASSPHRASE:NO. Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and POLYMARKET_API_PASSPHRASE environment variables.
+AUTHENTICATION FAILED in iteration 1: COLLECT FILLS AUTH FAILED: Missing API credentials - KEY:NO, SECRET:NO, PASSPHRASE:NO. Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and POLYMARKET_API_PASSPHRASE environment variables.. Fill collection cannot continue without valid API credentials. Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and POLYMARKET_API_PASSPHRASE environment variables.
+[OpenClaw Notification] 🚨 Polymarket fills loop STOPPED: Authentication failed. Check API credentials (POLYMARKET_API_KEY, etc.).
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/dan/src/polymarket-bot/src/polymarket/cli.py", line 3666, in <module>
+    main()
+    ~~~~^^
+  File "/home/dan/src/polymarket-bot/src/polymarket/cli.py", line 3662, in main
+    args.func(args)
+    ~~~~~~~~~^^^^^^
+  File "/home/dan/src/polymarket-bot/src/polymarket/cli.py", line 1731, in cmd_collect_fills_loop
+    run_collect_fills_loop(
+    ~~~~~~~~~~~~~~~~~~~~~~^
+        data_dir=Path(args.data_dir) if args.data_dir else None,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+        lookback_hours=float(args.lookback_hours),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dan/src/polymarket-bot/src/polymarket/fills_loop.py", line 210, in run_collect_fills_loop
+    collect_result = collect_fills(
+        fills_path=fills_path,
+    ...<5 lines>...
+        last_heartbeat_time=last_heartbeat_time,
+    )
+  File "/home/dan/src/polymarket-bot/src/polymarket/fills_collector.py", line 819, in collect_fills
+    raise AuthenticationError(msg)
+polymarket.fills_collector.AuthenticationError: COLLECT FILLS AUTH FAILED: Missing API credentials - KEY:NO, SECRET:NO, PASSPHRASE:NO. Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and POLYMARKET_API_PASSPHRASE environment variables.
