@@ -12,6 +12,7 @@ import pytest
 
 from polymarket.fills_loop import (
     check_fills_staleness,
+    calculate_adjusted_lookback,
     run_collect_fills_loop,
 )
 
@@ -102,6 +103,84 @@ class TestCheckFillsStaleness:
             # With 2h threshold, should be stale
             result = check_fills_staleness(fills_path, stale_alert_hours=2.0)
             assert result["is_stale"] is True
+
+
+class TestCalculateAdjustedLookback:
+    """Tests for calculate_adjusted_lookback function."""
+
+    def test_no_last_fill_no_adjustment(self):
+        """When no last_fill_at, should not adjust."""
+        lookback, adjusted = calculate_adjusted_lookback(
+            last_fill_at=None,
+            current_lookback_hours=72.0,
+            original_lookback_hours=72.0,
+        )
+        assert lookback == 72.0
+        assert adjusted is False
+
+    def test_fresh_fills_no_adjustment(self):
+        """When fills are fresh (< 6h), should not adjust."""
+        last_fill = datetime.now(UTC) - timedelta(hours=3)
+        lookback, adjusted = calculate_adjusted_lookback(
+            last_fill_at=last_fill,
+            current_lookback_hours=72.0,
+            original_lookback_hours=72.0,
+        )
+        assert lookback == 72.0
+        assert adjusted is False
+
+    def test_stale_fills_auto_widen(self):
+        """When fills are stale (> 6h), should widen lookback."""
+        last_fill = datetime.now(UTC) - timedelta(hours=10)
+        lookback, adjusted = calculate_adjusted_lookback(
+            last_fill_at=last_fill,
+            current_lookback_hours=72.0,
+            original_lookback_hours=72.0,
+        )
+        assert adjusted is True
+        assert lookback > 72.0
+        # Should be around 15% increase (with jitter)
+        assert 75.0 < lookback < 95.0  # 72 * 1.15 = 82.8, with +/- 5% jitter
+
+    def test_widen_respects_max_bound(self):
+        """Lookback should not exceed 3x original."""
+        last_fill = datetime.now(UTC) - timedelta(hours=100)
+        lookback, adjusted = calculate_adjusted_lookback(
+            last_fill_at=last_fill,
+            current_lookback_hours=200.0,  # Already high
+            original_lookback_hours=72.0,
+        )
+        # Should be capped at 3x original = 216h
+        assert lookback <= 216.0
+        assert adjusted is True
+
+    def test_widen_already_at_max(self):
+        """When already at max, should not adjust further."""
+        last_fill = datetime.now(UTC) - timedelta(hours=100)
+        lookback, adjusted = calculate_adjusted_lookback(
+            last_fill_at=last_fill,
+            current_lookback_hours=216.0,  # Exactly at 3x max
+            original_lookback_hours=72.0,
+        )
+        assert lookback == 216.0
+        assert adjusted is False
+
+    def test_multiple_widening_events(self):
+        """Each stale check widens further until max."""
+        last_fill = datetime.now(UTC) - timedelta(hours=10)
+        current = 72.0
+        original = 72.0
+
+        for _ in range(10):
+            new_lookback, adjusted = calculate_adjusted_lookback(
+                last_fill_at=last_fill,
+                current_lookback_hours=current,
+                original_lookback_hours=original,
+            )
+            if adjusted:
+                current = new_lookback
+            # Should never exceed max
+            assert current <= 216.0  # 3x original
 
 
 class TestRunCollectFillsLoop:
