@@ -204,7 +204,7 @@ def run_collect_fills_loop(
                 )
 
             # Collect fills
-            logger.debug("Iteration %d: collecting fills...", iteration)
+            logger.info("Iteration %d: collecting fills (lookback=%.1fh)...", iteration, current_lookback)
             collect_result = collect_fills(
                 fills_path=fills_path,
                 paper_fills_path=paper_fills_path,
@@ -213,14 +213,26 @@ def run_collect_fills_loop(
                 lookback_hours=current_lookback,
             )
 
-            # Log collection results
+            # Log collection results with clear breakdown
             logger.info(
-                "Collected %d fills (%d account, %d paper, %d duplicates)",
+                "Iteration %d RESULT: appended=%d account_raw=%d paper_raw=%d dups=%d",
+                iteration,
                 collect_result["total_appended"],
                 collect_result["account_fills"],
                 collect_result["paper_fills"],
                 collect_result["duplicates_skipped"],
             )
+
+            # Additional diagnostics when zero fills
+            if collect_result["total_appended"] == 0:
+                if collect_result["account_fills"] == 0 and include_account:
+                    logger.warning(
+                        "Iteration %d: Zero account fills - check API credentials and auth"
+                    )
+                if collect_result["paper_fills"] == 0 and include_paper:
+                    logger.warning(
+                        "Iteration %d: Zero paper fills - check paper_trading/fills.jsonl exists and has data"
+                    )
 
             # Reset lookback if we got new fills
             if collect_result["total_appended"] > 0:

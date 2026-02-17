@@ -256,6 +256,153 @@ def cmd_fills_monitor(args: argparse.Namespace) -> None:
         print("=" * 70)
 
 
+def cmd_fills_diagnose(args: argparse.Namespace) -> None:
+    """Diagnose fills collection issues - why are account/paper fills returning 0?"""
+    from pathlib import Path
+
+    from .config import load_config, validate_credentials_diagnostic
+    from .fills_collector import (
+        check_api_auth,
+        collect_fills,
+        get_fills_summary,
+        load_paper_fills,
+    )
+
+    fills_path = Path(args.fills_path)
+    paper_fills_path = Path(args.paper_fills_path)
+
+    print("=" * 70)
+    print("FILLS COLLECTION DIAGNOSTIC")
+    print("=" * 70)
+    print()
+
+    # Step 1: Check credential configuration
+    print("STEP 1: API Credentials")
+    print("-" * 40)
+    config = load_config()
+    cred_diag = validate_credentials_diagnostic()
+
+    print(f"  Has credentials: {cred_diag['has_credentials']}")
+    print(f"  Can trade: {cred_diag['can_trade']}")
+    print(f"  Dry run: {cred_diag['dry_run']}")
+    print(f"  API Key length: {cred_diag['lengths']['api_key']}")
+    print(f"  API Secret length: {cred_diag['lengths']['api_secret']}")
+    print(f"  API Passphrase length: {cred_diag['lengths']['api_passphrase']}")
+
+    if not cred_diag['has_credentials']:
+        print("  ⚠️  WARNING: No API credentials configured")
+        print("  Recommendations:")
+        for rec in cred_diag['recommendations']:
+            print(f"    - {rec}")
+    else:
+        print("  ✓ Credentials present")
+        # Test auth
+        auth_test = check_api_auth(config)
+        print(f"  Auth test: {'✓ PASSED' if auth_test['success'] else '✗ FAILED'}")
+        if not auth_test['success']:
+            print(f"    Error: {auth_test['error']}")
+            print(f"    Status: {auth_test['status_code']}")
+            print(f"    Endpoint: {auth_test['endpoint']}")
+    print()
+
+    # Step 2: Check existing fills file
+    print("STEP 2: Existing Fills File")
+    print("-" * 40)
+    summary = get_fills_summary(fills_path)
+    print(f"  Path: {summary['fills_path']}")
+    print(f"  Exists: {summary['exists']}")
+    if summary['exists']:
+        print(f"  Total fills: {summary['total_fills']}")
+        print(f"  Unique tokens: {summary['unique_tokens']}")
+        print(f"  Unique markets: {summary['unique_markets']}")
+        print(f"  First fill: {summary['first_fill_at'] or 'N/A'}")
+        print(f"  Last fill: {summary['last_fill_at'] or 'N/A'}")
+        if summary['age_seconds'] is not None:
+            print(f"  Age: {summary['age_seconds'] / 3600:.1f} hours since last fill")
+    print()
+
+    # Step 3: Check paper trading fills
+    print("STEP 3: Paper Trading Fills")
+    print("-" * 40)
+    print(f"  Path: {paper_fills_path}")
+    print(f"  Exists: {paper_fills_path.exists()}")
+    if paper_fills_path.exists():
+        file_size = paper_fills_path.stat().st_size
+        print(f"  File size: {file_size} bytes")
+        paper_fills = load_paper_fills(paper_fills_path)
+        print(f"  Fills loaded: {len(paper_fills)}")
+        if paper_fills:
+            print(f"  Sample fill: {paper_fills[0].token_id[:20]}... @ {paper_fills[0].timestamp}")
+    else:
+        print("  ⚠️  WARNING: Paper fills file not found")
+        print(f"     Expected at: {paper_fills_path.absolute()}")
+    print()
+
+    # Step 4: Test collection
+    print("STEP 4: Test Collection")
+    print("-" * 40)
+    print("  Running collect_fills() with debug logging...")
+    print()
+
+    # Set logging to DEBUG for this test
+    import logging
+    logging.basicConfig(level=logging.DEBUG, format='%(levelname)s: %(message)s')
+
+    result = collect_fills(
+        fills_path=fills_path,
+        paper_fills_path=paper_fills_path,
+        include_account=args.test_account,
+        include_paper=args.test_paper,
+        lookback_hours=args.lookback_hours,
+    )
+
+    print()
+    print("  Results:")
+    print(f"    Account fills (raw): {result['account_fills']}")
+    print(f"    Paper fills (raw): {result['paper_fills']}")
+    print(f"    Duplicates skipped: {result['duplicates_skipped']}")
+    print(f"    Total appended: {result['total_appended']}")
+    print(f"    Lookback hours: {result['lookback_hours']}")
+    print()
+
+    # Step 5: Summary and recommendations
+    print("STEP 5: Summary & Recommendations")
+    print("-" * 40)
+    issues = []
+    recommendations = []
+
+    if not cred_diag['has_credentials']:
+        issues.append("No API credentials configured")
+        recommendations.append("Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, POLYMARKET_API_PASSPHRASE environment variables")
+
+    if not paper_fills_path.exists():
+        issues.append("Paper trading fills file does not exist")
+        recommendations.append("Run paper trading strategies to generate fills (e.g., btc-preclose-paper-loop)")
+
+    if result['account_fills'] == 0 and cred_diag['has_credentials']:
+        issues.append("Account fills returned 0 despite credentials")
+        recommendations.append("Check if API credentials are valid and have trade history")
+        recommendations.append("Verify the CLOB API endpoint is correct in endpoints.py")
+
+    if result['paper_fills'] == 0 and paper_fills_path.exists():
+        issues.append("Paper fills returned 0 despite file existing")
+        recommendations.append("Check if paper fills file has valid JSON lines")
+
+    if not issues:
+        print("  ✓ No issues detected")
+    else:
+        print("  Issues found:")
+        for issue in issues:
+            print(f"    - {issue}")
+        print()
+        print("  Recommendations:")
+        for rec in recommendations:
+            print(f"    - {rec}")
+
+    print()
+    print("=" * 70)
+
+
 def cmd_universe_5m(args: argparse.Namespace) -> None:
     from .universe import build_universe, save_universe
 
@@ -3351,6 +3498,20 @@ def main() -> None:
     fm.add_argument("--auto-adjust", action="store_true", default=True, help="Auto-adjust thresholds when stale")
     fm.add_argument("--format", choices=["json", "human"], default="human")
     fm.set_defaults(func=cmd_fills_monitor)
+
+    # Fills diagnose - debug why fills collection returns 0
+    fd = sub.add_parser(
+        "fills-diagnose",
+        help="Diagnose fills collection issues (why account/paper fills return 0)",
+    )
+    fd.add_argument("--fills-path", default="data/fills.jsonl", help="Path to fills.jsonl")
+    fd.add_argument("--paper-fills-path", default="data/paper_trading/fills.jsonl", help="Path to paper trading fills.jsonl")
+    fd.add_argument("--test-account", action="store_true", default=True, help="Test account fills collection")
+    fd.add_argument("--test-paper", action="store_true", default=True, help="Test paper fills collection")
+    fd.add_argument("--lookback-hours", type=float, default=72.0, help="Lookback window in hours")
+    fd.add_argument("--no-test-account", action="store_false", dest="test_account", help="Skip account fills test")
+    fd.add_argument("--no-test-paper", action="store_false", dest="test_paper", help="Skip paper fills test")
+    fd.set_defaults(func=cmd_fills_diagnose)
 
     # Combinatorial arbitrage command
     cb = sub.add_parser(

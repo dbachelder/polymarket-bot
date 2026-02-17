@@ -272,12 +272,26 @@ def load_paper_fills(paper_fills_path: Path | None = None) -> list[Fill]:
     if paper_fills_path is None:
         paper_fills_path = DEFAULT_PAPER_FILLS_PATH
 
+    logger.debug("Loading paper fills from: %s", paper_fills_path)
+    logger.debug("Paper fills path exists: %s, is_file: %s", paper_fills_path.exists(), paper_fills_path.is_file() if paper_fills_path.exists() else False)
+
     if not paper_fills_path.exists():
+        logger.warning("PAPER FILLS: File not found at %s", paper_fills_path)
+        return []
+
+    # Check file size for debugging
+    file_size = paper_fills_path.stat().st_size
+    logger.debug("Paper fills file size: %d bytes", file_size)
+
+    if file_size == 0:
+        logger.warning("PAPER FILLS: File exists but is empty (0 bytes)")
         return []
 
     fills = []
+    line_count = 0
     with open(paper_fills_path, encoding="utf-8") as f:
         for line in f:
+            line_count += 1
             line = line.strip()
             if not line:
                 continue
@@ -289,6 +303,7 @@ def load_paper_fills(paper_fills_path: Path | None = None) -> list[Fill]:
                 logger.warning("Failed to parse paper fill: %s", e)
                 continue
 
+    logger.debug("PAPER FILLS: Read %d lines, parsed %d fills", line_count, len(fills))
     return fills
 
 
@@ -410,11 +425,16 @@ def collect_fills(
     if fills_path is None:
         fills_path = DEFAULT_FILLS_PATH
 
+    logger.info("=" * 60)
+    logger.info("COLLECT FILLS START: include_account=%s include_paper=%s", include_account, include_paper)
+    logger.info("=" * 60)
+
     # Ensure directory exists
     fills_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Get existing transaction hashes for deduplication
     existing_txs = get_existing_tx_hashes(fills_path)
+    logger.debug("Existing transaction hashes in fills.jsonl: %d", len(existing_txs))
 
     # Use fixed lookback window instead of since=last_fill to avoid missing fills
     # when last_fill timestamp is stale or there are clock/sync issues
@@ -451,29 +471,39 @@ def collect_fills(
 
     # Fetch account fills
     if include_account:
+        logger.debug("Fetching account fills (since=%s)...", since.isoformat() if since else "None")
         try:
             account_fills = fetch_account_fills(since=since)
+            logger.debug("Fetched %d raw account fills", len(account_fills))
             for fill in account_fills:
                 if fill.transaction_hash and fill.transaction_hash in existing_txs:
                     results["duplicates_skipped"] += 1
+                    logger.debug("Skipping duplicate fill: tx_hash=%s", fill.transaction_hash)
                     continue
                 all_fills.append(fill)
             results["account_fills"] = len(account_fills)
         except Exception as e:
             logger.exception("Error fetching account fills: %s", e)
+    else:
+        logger.debug("Skipping account fills (include_account=False)")
 
     # Load paper fills
     if include_paper:
+        logger.debug("Loading paper fills from: %s", paper_fills_path or DEFAULT_PAPER_FILLS_PATH)
         try:
             paper_fills = load_paper_fills(paper_fills_path)
+            logger.debug("Loaded %d raw paper fills", len(paper_fills))
             for fill in paper_fills:
                 if fill.transaction_hash and fill.transaction_hash in existing_txs:
                     results["duplicates_skipped"] += 1
+                    logger.debug("Skipping duplicate paper fill: tx_hash=%s", fill.transaction_hash)
                     continue
                 all_fills.append(fill)
             results["paper_fills"] = len(paper_fills)
         except Exception as e:
             logger.exception("Error loading paper fills: %s", e)
+    else:
+        logger.debug("Skipping paper fills (include_paper=False)")
 
     # Sort by timestamp
     all_fills.sort(key=lambda f: f.timestamp)
@@ -482,13 +512,15 @@ def collect_fills(
     appended = append_fills(all_fills, fills_path)
     results["total_appended"] = appended
 
+    logger.info("=" * 60)
     logger.info(
-        "Collected %d fills (%d account, %d paper, %d duplicates skipped)",
+        "COLLECT FILLS RESULT: %d appended (%d account raw, %d paper raw, %d dups skipped)",
         appended,
         results["account_fills"],
         results["paper_fills"],
         results["duplicates_skipped"],
     )
+    logger.info("=" * 60)
 
     return results
 
