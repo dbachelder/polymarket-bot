@@ -196,7 +196,8 @@ class TestRunCollectFillsLoop:
             fills_path = data_dir / "fills.jsonl"
 
             # Mock time to control the loop timing
-            mock_time.side_effect = [0.0, 1.0]  # started, elapsed
+            # Need 4 values: started, elapsed, last_heartbeat_time update, jitter calc
+            mock_time.side_effect = [0.0, 1.0, 2.0, 3.0]
 
             # Mock collect_fills to return a result
             mock_collect_fills.return_value = {
@@ -228,7 +229,8 @@ class TestRunCollectFillsLoop:
             data_dir = Path(tmpdir)
 
             # Mock time: started at 0, ended at 10 (10s elapsed)
-            mock_time.side_effect = [0.0, 10.0]
+            # Need extra values for heartbeat time update and jitter calc
+            mock_time.side_effect = [0.0, 10.0, 11.0, 12.0]
 
             mock_collect_fills.return_value = {
                 "total_appended": 0,
@@ -260,12 +262,14 @@ class TestRunCollectFillsLoop:
         with tempfile.TemporaryDirectory() as tmpdir:
             data_dir = Path(tmpdir)
 
-            mock_time.side_effect = [0.0, 1.0]
+            # Need extra values for heartbeat time update and jitter calc
+            mock_time.side_effect = [0.0, 1.0, 2.0, 3.0]
             mock_collect_fills.return_value = {
                 "total_appended": 0,
                 "account_fills": 0,
                 "paper_fills": 0,
                 "duplicates_skipped": 0,
+                "heartbeat_logged": False,
             }
 
             with pytest.raises(StopIteration):
@@ -304,12 +308,14 @@ class TestRunCollectFillsLoop:
             fills_path.parent.mkdir(parents=True, exist_ok=True)
             fills_path.write_text(json.dumps(fill) + "\n")
 
-            mock_time.side_effect = [0.0, 1.0]
+            # Need extra values for heartbeat time update and jitter calc
+            mock_time.side_effect = [0.0, 1.0, 2.0, 3.0]
             mock_collect_fills.return_value = {
                 "total_appended": 0,
                 "account_fills": 0,
                 "paper_fills": 0,
                 "duplicates_skipped": 0,
+                "heartbeat_logged": False,
             }
 
             with pytest.raises(StopIteration):
@@ -333,7 +339,8 @@ class TestRunCollectFillsLoop:
         with tempfile.TemporaryDirectory() as tmpdir:
             data_dir = Path(tmpdir)
 
-            mock_time.side_effect = [0.0, 1.0]
+            # Need extra values for heartbeat time update and jitter calc
+            mock_time.side_effect = [0.0, 1.0, 2.0, 3.0]
             mock_collect_fills.side_effect = Exception("API error")
 
             # Should not raise - should catch and log the error
@@ -369,12 +376,14 @@ class TestRunCollectFillsLoop:
             fills_path.parent.mkdir(parents=True, exist_ok=True)
             fills_path.write_text(json.dumps(fill) + "\n")
 
-            mock_time.side_effect = [0.0, 1.0]
+            # Need extra values for heartbeat time update and jitter calc
+            mock_time.side_effect = [0.0, 1.0, 2.0, 3.0]
             mock_collect_fills.return_value = {
                 "total_appended": 0,
                 "account_fills": 0,
                 "paper_fills": 0,
                 "duplicates_skipped": 0,
+                "heartbeat_logged": False,
             }
 
             custom_callback = MagicMock()

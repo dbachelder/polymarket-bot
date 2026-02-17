@@ -6,15 +6,24 @@ Collects fills from:
 
 Writes append-only fills to data/fills.jsonl for PnL verification.
 Handles deduplication via transaction hash.
+
+Includes:
+- Retry logic with exponential backoff for transient errors
+- Circuit breaker pattern for auth failures
+- Heartbeat logging to distinguish silence from failure
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import random
+import time
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -33,6 +42,131 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_FILLS_PATH = Path("data/fills.jsonl")
 DEFAULT_PAPER_FILLS_PATH = Path("data/paper_trading/fills.jsonl")
+
+# Retry configuration
+DEFAULT_MAX_RETRIES = 3
+DEFAULT_BASE_DELAY = 1.0
+DEFAULT_MAX_DELAY = 30.0
+DEFAULT_BACKOFF_FACTOR = 2.0
+
+# Circuit breaker configuration
+DEFAULT_CB_FAILURE_THRESHOLD = 5
+DEFAULT_CB_RESET_TIMEOUT_SECONDS = 300  # 5 minutes
+
+# Heartbeat configuration
+DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 1800  # 30 minutes
+
+
+class CircuitState(Enum):
+    """Circuit breaker states."""
+
+    CLOSED = "closed"  # Normal operation
+    OPEN = "open"  # Failing, reject requests
+    HALF_OPEN = "half_open"  # Testing if recovered
+
+
+@dataclass
+class CircuitBreaker:
+    """Circuit breaker for API calls.
+
+    Prevents repeated calls to a failing service by opening the circuit
+    after a threshold of failures. After a timeout, enters half-open state
+    to test if the service has recovered.
+
+    Args:
+        failure_threshold: Number of failures before opening circuit
+        reset_timeout_seconds: Seconds before attempting recovery
+        name: Circuit breaker name for logging
+    """
+
+    failure_threshold: int = DEFAULT_CB_FAILURE_THRESHOLD
+    reset_timeout_seconds: float = DEFAULT_CB_RESET_TIMEOUT_SECONDS
+    name: str = "default"
+
+    _state: CircuitState = field(default=CircuitState.CLOSED, init=False)
+    _failure_count: int = field(default=0, init=False)
+    _last_failure_time: float | None = field(default=None, init=False)
+    _last_success_time: float | None = field(default=None, init=False)
+
+    @property
+    def state(self) -> CircuitState:
+        """Get current circuit state, transitioning if needed."""
+        if self._state == CircuitState.OPEN:
+            # Check if we should try half-open
+            if self._last_failure_time is not None:
+                elapsed = time.time() - self._last_failure_time
+                if elapsed >= self.reset_timeout_seconds:
+                    logger.info(
+                        "Circuit breaker '%s' entering HALF_OPEN after %.0fs timeout",
+                        self.name,
+                        elapsed,
+                    )
+                    self._state = CircuitState.HALF_OPEN
+        return self._state
+
+    def can_execute(self) -> bool:
+        """Check if execution is allowed."""
+        return self.state in (CircuitState.CLOSED, CircuitState.HALF_OPEN)
+
+    def record_success(self) -> None:
+        """Record a successful call."""
+        if self._state == CircuitState.HALF_OPEN:
+            logger.info("Circuit breaker '%s' closing (recovered)", self.name)
+            self._state = CircuitState.CLOSED
+        self._failure_count = 0
+        self._last_success_time = time.time()
+
+    def record_failure(self, is_auth_failure: bool = False) -> None:
+        """Record a failed call.
+
+        Args:
+            is_auth_failure: If True, open circuit immediately (auth failures
+                are unlikely to resolve without intervention)
+        """
+        self._failure_count += 1
+        self._last_failure_time = time.time()
+
+        if is_auth_failure:
+            # Auth failures open circuit immediately
+            if self._state != CircuitState.OPEN:
+                logger.error(
+                    "Circuit breaker '%s' OPEN due to auth failure (credentials invalid)",
+                    self.name,
+                )
+                self._state = CircuitState.OPEN
+        elif self._failure_count >= self.failure_threshold:
+            if self._state != CircuitState.OPEN:
+                logger.error(
+                    "Circuit breaker '%s' OPEN after %d failures",
+                    self.name,
+                    self._failure_count,
+                )
+                self._state = CircuitState.OPEN
+
+    def get_status(self) -> dict[str, Any]:
+        """Get circuit breaker status for diagnostics."""
+        now = time.time()
+        return {
+            "name": self.name,
+            "state": self._state.value,
+            "failure_count": self._failure_count,
+            "failure_threshold": self.failure_threshold,
+            "seconds_since_last_failure": (
+                now - self._last_failure_time if self._last_failure_time else None
+            ),
+            "seconds_since_last_success": (
+                now - self._last_success_time if self._last_success_time else None
+            ),
+            "reset_timeout_seconds": self.reset_timeout_seconds,
+        }
+
+
+# Global circuit breaker instance for fills API
+_fills_circuit_breaker = CircuitBreaker(
+    failure_threshold=DEFAULT_CB_FAILURE_THRESHOLD,
+    reset_timeout_seconds=DEFAULT_CB_RESET_TIMEOUT_SECONDS,
+    name="fills_api",
+)
 
 
 def _client(timeout: float = 30.0) -> httpx.Client:
@@ -73,6 +207,63 @@ def _mask_value(value: str | None, visible_chars: int = 4) -> str:
     if len(value) <= visible_chars:
         return "****" + value[-visible_chars:] if len(value) > 0 else "<not set>"
     return "****" + value[-visible_chars:]
+
+
+def _is_retryable_error(status_code: int | None, error: Exception | None = None) -> bool:
+    """Check if an error is retryable.
+
+    Args:
+        status_code: HTTP status code if available
+        error: Exception if available
+
+    Returns:
+        True if the error is likely transient and retryable
+    """
+    # Never retry auth failures
+    if status_code in (401, 403):
+        return False
+
+    # Retry rate limiting with backoff
+    if status_code == 429:
+        return True
+
+    # Retry server errors
+    if status_code in (500, 502, 503, 504):
+        return True
+
+    # Retry on network/timeout errors
+    if isinstance(error, (httpx.ConnectError, httpx.TimeoutException, httpx.ReadTimeout)):
+        return True
+
+    # Don't retry other 4xx errors (client errors)
+    if status_code and 400 <= status_code < 500:
+        return False
+
+    # Default: retry unknown errors
+    return True
+
+
+def _calculate_retry_delay(
+    attempt: int,
+    base_delay: float = DEFAULT_BASE_DELAY,
+    max_delay: float = DEFAULT_MAX_DELAY,
+    backoff_factor: float = DEFAULT_BACKOFF_FACTOR,
+) -> float:
+    """Calculate retry delay with exponential backoff and jitter.
+
+    Args:
+        attempt: Current retry attempt (0-indexed)
+        base_delay: Initial delay in seconds
+        max_delay: Maximum delay in seconds
+        backoff_factor: Multiplier for each retry
+
+    Returns:
+        Delay in seconds with jitter applied
+    """
+    delay = min(base_delay * (backoff_factor**attempt), max_delay)
+    # Add jitter (±25%)
+    jitter = delay * random.uniform(-0.25, 0.25)
+    return delay + jitter
 
 
 def validate_credentials(config) -> dict:
@@ -138,6 +329,12 @@ def check_api_auth(config) -> dict:
         result["error"] = "Cannot test auth: no credentials configured"
         return result
 
+    # Check circuit breaker first
+    if not _fills_circuit_breaker.can_execute():
+        result["error"] = "Circuit breaker is OPEN - too many recent failures"
+        result["circuit_breaker"] = _fills_circuit_breaker.get_status()
+        return result
+
     try:
         with _client() as client:
             headers = _auth_headers(config)
@@ -148,34 +345,47 @@ def check_api_auth(config) -> dict:
 
             if resp.status_code == 200:
                 result["success"] = True
+                _fills_circuit_breaker.record_success()
             elif resp.status_code == 401:
                 result["error"] = "Authentication failed: Invalid credentials"
+                _fills_circuit_breaker.record_failure(is_auth_failure=True)
             elif resp.status_code == 403:
                 result["error"] = "Authorization failed: Insufficient permissions"
+                _fills_circuit_breaker.record_failure(is_auth_failure=True)
             else:
                 result["error"] = f"Unexpected status code: {resp.status_code}"
+                _fills_circuit_breaker.record_failure()
 
     except httpx.ConnectError as e:
         result["error"] = f"Connection error: {e}"
+        _fills_circuit_breaker.record_failure()
     except httpx.TimeoutException as e:
         result["error"] = f"Timeout error: {e}"
+        _fills_circuit_breaker.record_failure()
     except Exception as e:
         result["error"] = f"Error testing auth: {e}"
+        _fills_circuit_breaker.record_failure()
 
     return result
 
 
-def fetch_account_fills(
+def fetch_account_fills_with_retry(
     since: datetime | None = None,
     limit: int = 100,
     config=None,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    base_delay: float = DEFAULT_BASE_DELAY,
+    max_delay: float = DEFAULT_MAX_DELAY,
 ) -> list[Fill]:
-    """Fetch fills from Polymarket CLOB API for authenticated account.
+    """Fetch fills from Polymarket CLOB API with retry logic.
 
     Args:
         since: Only fetch fills after this timestamp
         limit: Maximum fills to fetch
         config: Optional PolymarketConfig (loads from env if not provided)
+        max_retries: Maximum number of retry attempts
+        base_delay: Initial retry delay in seconds
+        max_delay: Maximum retry delay in seconds
 
     Returns:
         List of Fill objects from account history
@@ -197,74 +407,164 @@ def fetch_account_fills(
         logger.error(msg)
         raise AuthenticationError(msg)
 
+    # Check circuit breaker
+    if not _fills_circuit_breaker.can_execute():
+        cb_status = _fills_circuit_breaker.get_status()
+        logger.error(
+            "FILLS CIRCUIT OPEN: Circuit breaker is %s after %d failures. "
+            "Last failure %.0fs ago. Waiting for timeout (%.0fs) before retry.",
+            cb_status["state"],
+            cb_status["failure_count"],
+            cb_status["seconds_since_last_failure"] or 0,
+            cb_status["reset_timeout_seconds"],
+        )
+        return []
+
     fills = []
-    try:
-        with _client() as client:
-            headers = _auth_headers(config)
+    last_error = None
 
-            # The CLOB API endpoint for fills/trades
-            # Note: This is a placeholder - actual endpoint may differ
-            # Common patterns: /trades, /fills, /orders?status=FILLED
-            params: dict[str, str | int] = {"limit": limit}
-            if since:
-                params["after"] = since.isoformat()
+    for attempt in range(max_retries + 1):
+        if attempt > 0:
+            delay = _calculate_retry_delay(attempt - 1, base_delay, max_delay)
+            logger.info("Retry attempt %d/%d after %.1fs delay", attempt, max_retries, delay)
+            time.sleep(delay)
 
-            # Try common endpoints
-            endpoints_to_try = ["/trades", "/fills", "/orders"]
+        try:
+            with _client() as client:
+                headers = _auth_headers(config)
 
-            for endpoint in endpoints_to_try:
-                try:
-                    resp = client.get(endpoint, params=params, headers=headers)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        # Handle different response formats
-                        if isinstance(data, list):
-                            fill_list = data
-                        elif isinstance(data, dict):
-                            fill_list = data.get("trades", data.get("fills", data.get("data", [])))
+                # The CLOB API endpoint for fills/trades
+                params: dict[str, str | int] = {"limit": limit}
+                if since:
+                    params["after"] = since.isoformat()
+
+                # Try common endpoints
+                endpoints_to_try = ["/trades", "/fills", "/orders"]
+                endpoint_success = False
+
+                for endpoint in endpoints_to_try:
+                    try:
+                        resp = client.get(endpoint, params=params, headers=headers)
+
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            # Handle different response formats
+                            if isinstance(data, list):
+                                fill_list = data
+                            elif isinstance(data, dict):
+                                fill_list = data.get("trades", data.get("fills", data.get("data", [])))
+                            else:
+                                fill_list = []
+
+                            for fill_data in fill_list:
+                                try:
+                                    fill = Fill.from_dict(fill_data)
+                                    fills.append(fill)
+                                except (ValueError, KeyError, TypeError) as e:
+                                    logger.warning("Failed to parse fill: %s", e)
+                                    continue
+
+                            logger.info("Fetched %d fills from %s", len(fills), endpoint)
+                            _fills_circuit_breaker.record_success()
+                            endpoint_success = True
+                            break
+
+                        elif resp.status_code == 404:
+                            continue  # Try next endpoint
+
+                        elif resp.status_code == 401:
+                            logger.error(
+                                "FILLS AUTH FAILED: HTTP 401 from %s - invalid credentials. "
+                                "Check POLYMARKET_API_KEY, POLYMARKET_API_SECRET, POLYMARKET_API_PASSPHRASE",
+                                endpoint,
+                            )
+                            _fills_circuit_breaker.record_failure(is_auth_failure=True)
+                            # Don't retry auth failures
+                            return fills
+
+                        elif resp.status_code == 429:
+                            logger.warning("Rate limited (429) on %s, will retry", endpoint)
+                            # Let retry logic handle this
+                            last_error = httpx.HTTPStatusError(
+                                f"Rate limited: {resp.status_code}",
+                                request=resp.request,
+                                response=resp,
+                            )
+                            break  # Break endpoint loop, outer retry will handle
+
                         else:
-                            fill_list = []
+                            logger.warning("Unexpected status %d from %s", resp.status_code, endpoint)
+                            last_error = httpx.HTTPStatusError(
+                                f"Unexpected status: {resp.status_code}",
+                                request=resp.request,
+                                response=resp,
+                            )
 
-                        for fill_data in fill_list:
-                            try:
-                                fill = Fill.from_dict(fill_data)
-                                fills.append(fill)
-                            except (ValueError, KeyError, TypeError) as e:
-                                logger.warning("Failed to parse fill: %s", e)
-                                continue
+                    except httpx.HTTPError as e:
+                        logger.warning("HTTP error fetching from %s: %s", endpoint, e)
+                        last_error = e
+                        continue
 
-                        logger.info("Fetched %d fills from %s", len(fills), endpoint)
-                        break
-                    elif resp.status_code == 404:
-                        continue  # Try next endpoint
-                    elif resp.status_code == 401:
-                        logger.error(
-                            "FILLS AUTH FAILED: HTTP 401 from %s - invalid credentials. "
-                            "Check POLYMARKET_API_KEY, POLYMARKET_API_SECRET, POLYMARKET_API_PASSPHRASE",
-                            endpoint,
-                        )
-                        break
-                    else:
-                        logger.warning("Unexpected status %d from %s", resp.status_code, endpoint)
+                if endpoint_success:
+                    return fills
 
-                except httpx.HTTPError as e:
-                    logger.warning("HTTP error fetching from %s: %s", endpoint, e)
-                    continue
+                # If we got here without success, check if we should retry
+                if last_error is not None:
+                    status_code = None
+                    if isinstance(last_error, httpx.HTTPStatusError):
+                        status_code = last_error.response.status_code
 
-            # Log when all endpoints tried but no fills found
-            if not fills:
-                logger.warning(
-                    "FILLS EMPTY: No fills found from any endpoint after trying %s. "
-                    "This could mean: (1) no trades in lookback period, (2) wrong endpoints, "
-                    "or (3) auth not working properly. since=%s",
-                    endpoints_to_try,
-                    since.isoformat() if since else "None",
-                )
+                    if not _is_retryable_error(status_code, last_error):
+                        logger.error("Non-retryable error, giving up: %s", last_error)
+                        _fills_circuit_breaker.record_failure(is_auth_failure=(status_code in (401, 403)))
+                        return fills
 
-    except Exception as e:
-        logger.exception("Error fetching account fills: %s", e)
+                    if attempt >= max_retries:
+                        logger.error("Max retries (%d) exceeded, giving up: %s", max_retries, last_error)
+                        _fills_circuit_breaker.record_failure()
+                        return fills
+
+        except (
+            httpx.ConnectError,
+            httpx.TimeoutException,
+            httpx.ReadTimeout,
+            httpx.RemoteProtocolError,
+        ) as e:
+            logger.warning("Network error on attempt %d: %s", attempt + 1, e)
+            last_error = e
+
+            if attempt >= max_retries:
+                logger.error("Max retries (%d) exceeded for network error: %s", max_retries, e)
+                _fills_circuit_breaker.record_failure()
+                return fills
+
+        except Exception as e:
+            logger.exception("Unexpected error fetching fills: %s", e)
+            _fills_circuit_breaker.record_failure()
+            return fills
 
     return fills
+
+
+def fetch_account_fills(
+    since: datetime | None = None,
+    limit: int = 100,
+    config=None,
+) -> list[Fill]:
+    """Fetch fills from Polymarket CLOB API for authenticated account.
+
+    This is a convenience wrapper that calls fetch_account_fills_with_retry
+    with default retry settings.
+
+    Args:
+        since: Only fetch fills after this timestamp
+        limit: Maximum fills to fetch
+        config: Optional PolymarketConfig (loads from env if not provided)
+
+    Returns:
+        List of Fill objects from account history
+    """
+    return fetch_account_fills_with_retry(since=since, limit=limit, config=config)
 
 
 def load_paper_fills(paper_fills_path: Path | None = None) -> list[Fill]:
@@ -393,6 +693,53 @@ def append_fills(fills: Sequence[Fill], fills_path: Path) -> int:
     return count
 
 
+def _log_heartbeat(
+    iteration: int,
+    fills_path: Path,
+    last_heartbeat_time: float | None,
+    circuit_breaker: CircuitBreaker,
+) -> float:
+    """Log heartbeat to distinguish silence from failure.
+
+    Args:
+        iteration: Current loop iteration
+        fills_path: Path to fills file
+        last_heartbeat_time: Timestamp of last heartbeat
+        circuit_breaker: Circuit breaker instance to check status
+
+    Returns:
+        Current timestamp (for tracking next heartbeat)
+    """
+    now = time.time()
+
+    # Only log every 30 minutes
+    if last_heartbeat_time is not None:
+        elapsed = now - last_heartbeat_time
+        if elapsed < DEFAULT_HEARTBEAT_INTERVAL_SECONDS:
+            return last_heartbeat_time
+
+    # Get fills summary
+    summary = get_fills_summary(fills_path)
+    cb_status = circuit_breaker.get_status()
+
+    # Calculate age
+    age_str = "N/A"
+    if summary.get("age_seconds") is not None:
+        age_hours = summary["age_seconds"] / 3600
+        age_str = f"{age_hours:.1f}h"
+
+    logger.info(
+        "HEARTBEAT: iteration=%d fills=%d age=%s circuit=%s failures=%d",
+        iteration,
+        summary.get("total_fills", 0),
+        age_str,
+        cb_status["state"],
+        cb_status["failure_count"],
+    )
+
+    return now
+
+
 def collect_fills(
     fills_path: Path | None = None,
     paper_fills_path: Path | None = None,
@@ -400,6 +747,8 @@ def collect_fills(
     include_paper: bool = True,
     since: datetime | None = None,
     lookback_hours: float = 72.0,
+    iteration: int = 0,
+    last_heartbeat_time: float | None = None,
 ) -> dict:
     """Collect fills from all sources and write to fills.jsonl.
 
@@ -410,6 +759,8 @@ def collect_fills(
         include_paper: Whether to include paper trading fills
         since: Only collect fills after this timestamp (deprecated: use lookback_hours)
         lookback_hours: Fixed lookback window in hours (default: 72h)
+        iteration: Loop iteration number (for heartbeat logging)
+        last_heartbeat_time: Timestamp of last heartbeat
 
     Returns:
         Dict with collection results summary
@@ -419,6 +770,14 @@ def collect_fills(
 
     # Ensure directory exists
     fills_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Log heartbeat (distinguishes silence from failure)
+    new_heartbeat_time = _log_heartbeat(
+        iteration=iteration,
+        fills_path=fills_path,
+        last_heartbeat_time=last_heartbeat_time,
+        circuit_breaker=_fills_circuit_breaker,
+    )
 
     # Get existing transaction hashes for deduplication
     existing_txs = get_existing_tx_hashes(fills_path)
@@ -438,6 +797,8 @@ def collect_fills(
         "since": since.isoformat() if since else None,
         "lookback_hours": lookback_hours,
         "timestamp": datetime.now(UTC).isoformat(),
+        "heartbeat_logged": new_heartbeat_time != last_heartbeat_time,
+        "circuit_breaker_state": _fills_circuit_breaker.state.value,
     }
 
     all_fills = []
@@ -458,10 +819,10 @@ def collect_fills(
             raise AuthenticationError(msg)
         logger.debug("COLLECT FILLS: API credentials present")
 
-    # Fetch account fills
+    # Fetch account fills with retry logic
     if include_account:
         try:
-            account_fills = fetch_account_fills(since=since)
+            account_fills = fetch_account_fills_with_retry(since=since)
             for fill in account_fills:
                 if fill.transaction_hash and fill.transaction_hash in existing_txs:
                     results["duplicates_skipped"] += 1
@@ -595,6 +956,7 @@ def startup_diagnostic() -> dict:
         "working_directory": str(Path.cwd()),
         "credentials_ok": False,
         "api_auth_ok": False,
+        "circuit_breaker": _fills_circuit_breaker.get_status(),
         "errors": [],
         "warnings": [],
         "actions_required": [],
@@ -621,6 +983,7 @@ def startup_diagnostic() -> dict:
         config = load_config()
         auth_test = check_api_auth(config)
         results["api_auth_test"] = auth_test
+        results["circuit_breaker"] = _fills_circuit_breaker.get_status()
 
         if auth_test["success"]:
             results["api_auth_ok"] = True
@@ -664,6 +1027,18 @@ def startup_diagnostic() -> dict:
     else:
         logger.info("DATA DIR: %s does not exist (will be created)", data_dir)
 
+    # Step 4: Check circuit breaker state
+    logger.info("STEP 4: Checking circuit breaker state...")
+    cb_status = _fills_circuit_breaker.get_status()
+    if cb_status["state"] != "closed":
+        logger.warning(
+            "CIRCUIT BREAKER: State is %s with %d failures",
+            cb_status["state"],
+            cb_status["failure_count"],
+        )
+    else:
+        logger.info("CIRCUIT BREAKER: CLOSED (normal operation)")
+
     logger.info("=" * 60)
     logger.info(
         "DIAGNOSTIC COMPLETE - Status: %s",
@@ -693,3 +1068,40 @@ def test_credentials_detailed() -> dict:
     }
 
     return result
+
+
+def get_circuit_breaker_status() -> dict:
+    """Get current circuit breaker status.
+
+    Returns:
+        Dict with circuit breaker status information
+    """
+    return _fills_circuit_breaker.get_status()
+
+
+def reset_circuit_breaker() -> dict:
+    """Reset the circuit breaker to closed state.
+
+    This can be called after fixing auth issues to resume API calls.
+
+    Returns:
+        Dict with new circuit breaker status
+    """
+    global _fills_circuit_breaker
+    old_status = _fills_circuit_breaker.get_status()
+
+    # Create new circuit breaker in closed state
+    _fills_circuit_breaker = CircuitBreaker(
+        failure_threshold=DEFAULT_CB_FAILURE_THRESHOLD,
+        reset_timeout_seconds=DEFAULT_CB_RESET_TIMEOUT_SECONDS,
+        name="fills_api",
+    )
+
+    logger.info(
+        "Circuit breaker reset: %s -> closed (was %s with %d failures)",
+        old_status["state"],
+        old_status["state"],
+        old_status["failure_count"],
+    )
+
+    return _fills_circuit_breaker.get_status()

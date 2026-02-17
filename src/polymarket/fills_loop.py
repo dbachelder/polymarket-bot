@@ -183,6 +183,8 @@ def run_collect_fills_loop(
         startup_diagnostic()
 
     iteration = 0
+    last_heartbeat_time: float | None = None
+
     while True:
         started = time.time()
         iteration += 1
@@ -203,7 +205,7 @@ def run_collect_fills_loop(
                     original_lookback,
                 )
 
-            # Collect fills
+            # Collect fills (pass iteration for heartbeat logging)
             logger.debug("Iteration %d: collecting fills...", iteration)
             collect_result = collect_fills(
                 fills_path=fills_path,
@@ -211,7 +213,13 @@ def run_collect_fills_loop(
                 include_account=include_account,
                 include_paper=include_paper,
                 lookback_hours=current_lookback,
+                iteration=iteration,
+                last_heartbeat_time=last_heartbeat_time,
             )
+
+            # Update heartbeat time from result
+            if collect_result.get("heartbeat_logged"):
+                last_heartbeat_time = time.time()
 
             # Log collection results
             logger.info(
