@@ -71,16 +71,20 @@ class PolymarketConfig:
         loaded_env_path: Path | None = None
 
         if load_dotenv_file:
-            # Load from .env file if present (silently skip if not found)
-            env_path = Path.cwd() / ".env"
-            if env_path.exists():
-                load_dotenv(env_path)
-                loaded_env_path = env_path
-            # Also check parent directories for .env
+            # Search for .env in multiple locations
+            search_paths = [
+                Path.cwd() / ".env",  # Current working directory
+                Path(__file__).parent.parent.parent / ".env",  # Project root (relative to module)
+            ]
+            # Also check parent directories of cwd
             for parent in Path.cwd().parents:
-                env_path = parent / ".env"
+                search_paths.append(parent / ".env")
+
+            for env_path in search_paths:
                 if env_path.exists():
-                    load_dotenv(env_path)
+                    # Load WITHOUT override - existing env vars take precedence
+                    # This prevents empty values in .env from overriding real credentials
+                    load_dotenv(env_path, override=False)
                     loaded_env_path = env_path
                     break
 
