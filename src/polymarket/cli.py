@@ -256,6 +256,49 @@ def cmd_fills_monitor(args: argparse.Namespace) -> None:
         print("=" * 70)
 
 
+def cmd_paper_fill_loop(args: argparse.Namespace) -> None:
+    """Run supervised paper fill testbed loop."""
+    from decimal import Decimal
+    from pathlib import Path
+
+    from .paper_fill_loop import run_paper_fill_testbed_loop
+
+    run_paper_fill_testbed_loop(
+        data_dir=Path(args.data_dir),
+        paper_dir=Path(args.paper_dir),
+        snapshots_dir=Path(args.snapshots_dir),
+        interval_seconds=float(args.interval_seconds),
+        window_seconds=int(args.window_seconds),
+        cheap_price=Decimal(str(args.cheap_price)),
+        size=Decimal(str(args.size)),
+        max_relaxation_steps=int(args.max_relaxation_steps),
+    )
+
+
+def cmd_paper_fill_metric(args: argparse.Namespace) -> None:
+    """Emit daily metric for fills_appended_last_24h."""
+    from pathlib import Path
+
+    from .paper_fill_loop import emit_daily_metric, get_daily_metric
+
+    fills_path = Path(args.fills_path)
+
+    if args.format == "json":
+        metric = get_daily_metric(fills_path)
+        print(json.dumps(metric, indent=2))
+    else:
+        metric = emit_daily_metric(fills_path)
+        print("=" * 70)
+        print("PAPER FILL DAILY METRIC")
+        print("=" * 70)
+        print(f"fills_appended_last_24h: {metric['fills_appended_last_24h']}")
+        print(f"total_fills: {metric['total_fills']}")
+        print(f"last_fill_at: {metric['last_fill_at'] or 'N/A'}")
+        if metric['alert']:
+            print("\n🚨 ALERT: No fills in last 24h!")
+        print("=" * 70)
+
+
 def cmd_universe_5m(args: argparse.Namespace) -> None:
     from .universe import build_universe, save_universe
 
@@ -1859,6 +1902,7 @@ def cmd_pnl_health(args: argparse.Namespace) -> None:
         print("--- Fills ---")
         print(f"  Exists:         {fills['exists']}")
         print(f"  Total fills:    {fills.get('total_fills', 0)}")
+        print(f"  Last 24h:       {fills.get('fills_appended_last_24h', 0)}")
         print(f"  Last fill:      {fills.get('last_fill_at') or 'N/A'}")
         if fills.get("age_seconds") is not None:
             age_hours = fills["age_seconds"] / 3600
@@ -3351,6 +3395,30 @@ def main() -> None:
     fm.add_argument("--auto-adjust", action="store_true", default=True, help="Auto-adjust thresholds when stale")
     fm.add_argument("--format", choices=["json", "human"], default="human")
     fm.set_defaults(func=cmd_fills_monitor)
+
+    # Paper fill testbed loop - supervised continuous paper trading
+    pfl = sub.add_parser(
+        "paper-fill-loop",
+        help="Run supervised paper fill testbed loop (60s cadence, progressive threshold relaxation)",
+    )
+    pfl.add_argument("--data-dir", default="data", help="Base data directory")
+    pfl.add_argument("--paper-dir", default="data/paper_trading", help="Paper trading data dir")
+    pfl.add_argument("--snapshots-dir", default="data", help="Directory with collector snapshots")
+    pfl.add_argument("--interval-seconds", type=int, default=60, help="Seconds between iterations (default: 60)")
+    pfl.add_argument("--window-seconds", type=int, default=1800, help="Time window before close (default: 1800s = 30min)")
+    pfl.add_argument("--cheap-price", type=float, default=0.15, help="Starting cheap price threshold (default: 0.15)")
+    pfl.add_argument("--size", type=float, default=1.0, help="Position size cap (default: 1)")
+    pfl.add_argument("--max-relaxation-steps", type=int, default=5, help="Max threshold relaxation steps (default: 5)")
+    pfl.set_defaults(func=cmd_paper_fill_loop)
+
+    # Paper fill daily metric - one-line metric for monitoring
+    pfm = sub.add_parser(
+        "paper-fill-metric",
+        help="Emit daily metric: fills_appended_last_24h",
+    )
+    pfm.add_argument("--fills-path", default="data/paper_trading/fills.jsonl", help="Path to fills.jsonl")
+    pfm.add_argument("--format", choices=["json", "human"], default="human")
+    pfm.set_defaults(func=cmd_paper_fill_metric)
 
     # Combinatorial arbitrage command
     cb = sub.add_parser(

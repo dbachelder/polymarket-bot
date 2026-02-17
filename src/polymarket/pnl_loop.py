@@ -211,9 +211,16 @@ def pnl_health_check(
 
     # Check fills
     fills_summary = get_fills_summary(fills_path)
+
+    # Count fills in last 24h for daily metric
+    from .paper_fill_loop import count_fills_last_24h
+
+    fills_24h = count_fills_last_24h(fills_path)
+
     result["fills"] = {
         "exists": fills_summary["exists"],
         "total_fills": fills_summary["total_fills"],
+        "fills_appended_last_24h": fills_24h,
         "last_fill_at": fills_summary["last_fill_at"],
         "age_seconds": fills_summary["age_seconds"],
         "max_age_seconds": max_fills_age_seconds,
@@ -231,6 +238,12 @@ def pnl_health_check(
             result["warnings"].append(
                 f"Fills data is stale: {fills_summary['age_seconds']:.0f}s old"
             )
+
+    # Alert if no fills in last 24h
+    if fills_24h == 0 and fills_summary["exists"]:
+        result["fills"]["healthy"] = False
+        result["healthy"] = False
+        result["warnings"].append("No fills appended in last 24h")
 
     # Check PnL summaries
     pnl_summary = get_latest_pnl_summary(pnl_dir)
