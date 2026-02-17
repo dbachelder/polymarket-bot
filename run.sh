@@ -67,6 +67,14 @@ case "${1:-}" in
         shift
         $PYTHON -m polymarket.cli pnl-sanity-check "$@"
         ;;
+    paper-fill-loop)
+        shift
+        $PYTHON -m polymarket.cli paper-fill-loop "$@"
+        ;;
+    paper-fill-metric)
+        shift
+        $PYTHON -m polymarket.cli paper-fill-metric "$@"
+        ;;
     watchdog)
         shift
         $PYTHON -m polymarket.cli watchdog "$@"
@@ -155,6 +163,8 @@ case "${1:-}" in
         echo "  cross-market-report Generate cross-market arbitrage performance report"
         echo "  discounted-outcome-scan  Scan for discounted outcome arbitrage"
         echo "  discounted-outcome-performance  Show discounted outcome performance"
+        echo "  paper-fill-loop    Run supervised paper fill testbed loop (60s cadence)"
+        echo "  paper-fill-metric  Emit daily metric: fills_appended_last_24h"
         echo ""
         echo "Utility commands:"
         echo "  shell              Open shell with venv activated"
