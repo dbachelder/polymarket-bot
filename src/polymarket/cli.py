@@ -1700,6 +1700,7 @@ def cmd_collect_fills(args: argparse.Namespace) -> None:
         include_account=args.account,
         include_paper=args.paper,
         since=since,
+        lookback_hours=args.lookback_hours,
     )
 
     if args.format == "json":
@@ -1731,6 +1732,7 @@ def cmd_collect_fills_loop(args: argparse.Namespace) -> None:
         include_account=args.account,
         include_paper=args.paper,
         stale_alert_hours=float(args.stale_alert_hours),
+        lookback_hours=float(args.lookback_hours),
     )
 
 
@@ -2364,7 +2366,13 @@ def main() -> None:
     cf.add_argument(
         "--since",
         default=None,
-        help="ISO timestamp to collect from (default: last fill timestamp)",
+        help="ISO timestamp to collect from (default: use lookback-hours)",
+    )
+    cf.add_argument(
+        "--lookback-hours",
+        type=float,
+        default=72.0,
+        help="Fixed lookback window in hours (default: 72)",
     )
     cf.add_argument(
         "--account",
@@ -2453,6 +2461,12 @@ def main() -> None:
         type=float,
         default=6.0,
         help="Hours before triggering stale alert (default: 6)",
+    )
+    cfl.add_argument(
+        "--lookback-hours",
+        type=float,
+        default=72.0,
+        help="Fixed lookback window in hours for fill queries (default: 72)",
     )
     cfl.set_defaults(func=cmd_collect_fills_loop)
 
@@ -3206,8 +3220,8 @@ def main() -> None:
     )
     btcpc.add_argument("--data-dir", default="data/paper_trading", help="Paper trading data dir")
     btcpc.add_argument("--snapshots-dir", default="data", help="Directory with collector snapshots (default: data)")
-    btcpc.add_argument("--window-seconds", type=int, default=300, help="Time window before close (default: 300s)")
-    btcpc.add_argument("--cheap-price", type=float, default=0.05, help="Cheap price threshold (default: 0.05)")
+    btcpc.add_argument("--window-seconds", type=int, default=1800, help="Time window before close (default: 1800s = 30min)")
+    btcpc.add_argument("--cheap-price", type=float, default=0.15, help="Cheap price threshold (default: 0.15)")
     btcpc.add_argument("--size", type=float, default=1.0)
     btcpc.add_argument("--starting-cash", type=float, default=0.0)
     btcpc.add_argument("--use-monitor-thresholds", action="store_true", help="Use auto-adjusted thresholds from fills monitor")
@@ -3221,11 +3235,11 @@ def main() -> None:
     )
     btcpl.add_argument("--data-dir", default="data/paper_trading", help="Paper trading data dir")
     btcpl.add_argument("--snapshots-dir", default="data", help="Directory with collector snapshots (default: data)")
-    btcpl.add_argument("--window-seconds", type=int, default=300, help="Time window before close (default: 300s)")
-    btcpl.add_argument("--cheap-price", type=float, default=0.05, help="Cheap price threshold (default: 0.05)")
+    btcpl.add_argument("--window-seconds", type=int, default=1800, help="Time window before close (default: 1800s = 30min)")
+    btcpl.add_argument("--cheap-price", type=float, default=0.15, help="Cheap price threshold (default: 0.15)")
     btcpl.add_argument("--size", type=float, default=1.0)
     btcpl.add_argument("--starting-cash", type=float, default=0.0)
-    btcpl.add_argument("--loop-duration-minutes", type=int, default=10, help="How long to run (default: 10 min)")
+    btcpl.add_argument("--loop-duration-minutes", type=int, default=30, help="How long to run (default: 30 min)")
     btcpl.add_argument("--interval-seconds", type=int, default=60, help="Seconds between scans (default: 60)")
     btcpl.add_argument("--use-monitor-thresholds", action="store_true", help="Use auto-adjusted thresholds from fills monitor")
     btcpl.add_argument("--format", choices=["json", "human"], default="human")
