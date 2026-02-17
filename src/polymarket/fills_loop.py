@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .fills_collector import AuthenticationError, collect_fills, get_fills_summary
+from .fills_collector import collect_fills, get_fills_summary
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -183,6 +183,8 @@ def run_collect_fills_loop(
         startup_diagnostic()
 
     iteration = 0
+    last_heartbeat_time: float | None = None
+
     while True:
         started = time.time()
         iteration += 1
@@ -203,7 +205,7 @@ def run_collect_fills_loop(
                     original_lookback,
                 )
 
-            # Collect fills
+            # Collect fills (pass iteration for heartbeat logging)
             logger.debug("Iteration %d: collecting fills...", iteration)
             collect_result = collect_fills(
                 fills_path=fills_path,
@@ -211,7 +213,13 @@ def run_collect_fills_loop(
                 include_account=include_account,
                 include_paper=include_paper,
                 lookback_hours=current_lookback,
+                iteration=iteration,
+                last_heartbeat_time=last_heartbeat_time,
             )
+
+            # Update heartbeat time from result
+            if collect_result.get("heartbeat_logged"):
+                last_heartbeat_time = time.time()
 
             # Log collection results
             logger.info(
@@ -270,26 +278,6 @@ def run_collect_fills_loop(
                     on_stale_alert(notification)
                 else:
                     _send_openclaw_notification(notification)
-
-        except AuthenticationError as e:
-            # Authentication errors are fatal - log critical and exit
-            logger.critical(
-                "AUTHENTICATION FAILED in iteration %d: %s. "
-                "Fill collection cannot continue without valid API credentials. "
-                "Set POLYMARKET_API_KEY, POLYMARKET_API_SECRET, and "
-                "POLYMARKET_API_PASSPHRASE environment variables.",
-                iteration,
-                e,
-            )
-            # Send notification about auth failure
-            try:
-                _send_openclaw_notification(
-                    "🚨 Polymarket fills loop STOPPED: Authentication failed. "
-                    "Check API credentials (POLYMARKET_API_KEY, etc.)."
-                )
-            except Exception:
-                pass  # Notification is best-effort
-            raise  # Exit the loop
 
         except Exception:
             logger.exception("Error in collect-fills loop iteration %d", iteration)
