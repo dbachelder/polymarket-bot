@@ -130,6 +130,72 @@ The watchdog can monitor and restart stale collectors:
 ./run.sh watchdog --dry-run
 ```
 
+## Fills Collection
+
+The `collect-fills-loop` command requires Polymarket API credentials to fetch account fills. Without credentials, the loop will fail with "CREDENTIALS MISSING" errors.
+
+### Setting Up Credentials
+
+**Option 1: Use 1Password (Recommended)**
+
+Ensure you have a "Polymarket API" item in 1Password with fields:
+- `password` - API Key
+- `API Secret` - API Secret  
+- `Passphrase` - Passphrase
+
+Run the wrapper script that loads credentials from 1Password:
+
+```bash
+./scripts/run-fills-loop.sh
+```
+
+Or manually:
+```bash
+# Sign in to 1Password
+eval $(op signin --account my)
+
+# Source credentials and run
+source ./scripts/load-env-from-1password.sh
+./run.sh collect-fills-loop --interval-seconds 300 --stale-alert-hours 6 --no-account --paper
+```
+
+**Option 2: Environment Variables (for testing only)**
+
+```bash
+export POLYMARKET_API_KEY=your_key
+export POLYMARKET_API_SECRET=your_secret
+export POLYMARKET_API_PASSPHRASE=your_passphrase
+./run.sh collect-fills-loop --interval-seconds 300
+```
+
+### Fills Loop via Cron
+
+For cron jobs, use the wrapper script or source credentials before running:
+
+```bash
+# In crontab - requires 1Password session
+eval $(op signin --account my) && /home/dan/src/polymarket-bot/scripts/run-fills-loop.sh
+```
+
+Note: For unattended cron jobs, you'll need to either:
+1. Use a service account with 1Password Service Account tokens
+2. Export credentials to the `.env` file (less secure, but works for local bots)
+
+### Verifying Fills Collection
+
+Check if fills are being collected:
+
+```bash
+# Look for fills.json
+cat data/fills.json | head -50
+
+# Check the fills loop log
+tail -f fills-loop.out
+
+# Check process is running
+ps aux | grep collect-fills-loop
+```
+
 ## Troubleshooting
 
 ### "No module named polymarket"

@@ -1,4 +1,63 @@
-# Systemd Watchdog Setup
+# Systemd Services
+
+This directory contains systemd service and timer files for running Polymarket Bot services.
+
+## Services Overview
+
+| Service | Purpose | Credential Required |
+|---------|---------|---------------------|
+| `polymarket-watchdog` | Monitors collector health and restarts if stale | No |
+| `collect-fills-loop` | Continuously collects trade fills from Polymarket | Yes (API Key) |
+
+## Collect Fills Loop Service
+
+**IMPORTANT:** This service requires Polymarket API credentials. See [docs/ops.md](../docs/ops.md) for credential setup instructions.
+
+### Installation
+
+1. Copy the service file to your systemd user directory:
+   ```bash
+   cp systemd/collect-fills-loop.service ~/.config/systemd/user/
+   ```
+
+2. **Configure credentials**: The service loads credentials from 1Password. Ensure you have:
+   - 1Password CLI installed and configured
+   - A "Polymarket API" item in your personal vault with fields: password, API Secret, Passphrase
+
+3. Reload systemd:
+   ```bash
+   systemctl --user daemon-reload
+   ```
+
+4. Enable and start the service:
+   ```bash
+   systemctl --user enable collect-fills-loop.service
+   systemctl --user start collect-fills-loop.service
+   ```
+
+### Verification
+
+```bash
+# Check service status
+systemctl --user status collect-fills-loop.service
+
+# View logs
+journalctl --user -u collect-fills-loop.service -f
+
+# Check if fills are being collected
+ls -la data/fills.json
+tail data/fills.json
+```
+
+### Manual Operation
+
+For interactive use with credential loading:
+
+```bash
+./scripts/run-fills-loop.sh
+```
+
+## Watchdog Service
 
 This directory contains systemd service and timer files for running the Polymarket Bot collector watchdog.
 

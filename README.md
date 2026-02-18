@@ -102,6 +102,7 @@ Run `./run.sh` without arguments to see the full list of commands.
 | Command | Description |
 |---------|-------------|
 | `collect-15m-loop` | Continuous 15m market data collection |
+| `collect-fills-loop` | Continuous fills collection (requires API credentials) |
 | `collect-5m` | Single 5m predictions snapshot |
 | `collect-15m` | Single 15m snapshot |
 | `markets-5m` | Fetch 5-minute prediction markets |
