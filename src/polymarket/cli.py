@@ -1518,7 +1518,7 @@ def cmd_maker_fee_backtest(args: argparse.Namespace) -> None:
     from decimal import Decimal
     from pathlib import Path
 
-    from .strategy_maker_fee_asymmetry import load_snapshots_for_backtest, run_backtest
+    from .strategy_maker_fee_asymmetry import run_backtest
 
     snapshots_dir = Path(args.snapshots_dir)
     snapshots = sorted(snapshots_dir.glob("snapshot_15m_*.json"))
@@ -1559,7 +1559,7 @@ def cmd_maker_fee_backtest(args: argparse.Namespace) -> None:
         print(f"Avg edge at entry: {result['avg_edge_at_entry']:.2%}")
 
         if result.get("trades"):
-            print(f"\n--- Recent Trades ---")
+            print("\n--- Recent Trades ---")
             for trade in result["trades"][-5:]:
                 pnl_str = f"${trade['pnl']:+.2f}"
                 print(f"  {trade['direction']:<10} | {pnl_str:<12} | edge={trade['edge_at_entry']:+.1%} | {trade['market_id'][:30]}")
@@ -1596,11 +1596,11 @@ def cmd_maker_fee_performance(args: argparse.Namespace) -> None:
         print(f"\nFill rate: {perf.fill_rate:.1f}%")
         print(f"Total fills: {perf.total_fills}")
         print(f"Fills with edge: {perf.fills_with_edge}")
-        print(f"\nPnL:")
+        print("\nPnL:")
         print(f"  Total realized: ${float(perf.total_realized_pnl):,.2f}")
         print(f"  Avg per fill: ${float(perf.avg_pnl_per_fill):,.2f}")
         print(f"  EV per trade: ${float(perf.ev_per_trade):,.2f}")
-        print(f"\nFees:")
+        print("\nFees:")
         print(f"  Total fees paid: ${float(perf.total_fees_paid):,.2f}")
         print(f"  Fee rate: {perf.fee_rate:.2f}%")
         print(f"  Total volume: ${float(perf.total_volume):,.2f}")
