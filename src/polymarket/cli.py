@@ -1462,6 +1462,160 @@ def cmd_discounted_outcome_performance(args: argparse.Namespace) -> None:
         print("\n" + "=" * 70)
 
 
+def cmd_maker_fee_scan(args: argparse.Namespace) -> None:
+    """Scan for maker fee asymmetry opportunities."""
+    from decimal import Decimal
+    from pathlib import Path
+
+    from .strategy_maker_fee_asymmetry import run_maker_fee_asymmetry_scan
+
+    result = run_maker_fee_asymmetry_scan(
+        snapshots_dir=Path(args.snapshots_dir),
+        data_dir=Path(args.data_dir) if args.data_dir else None,
+        dry_run=not args.live,
+        max_positions=args.max_positions,
+        target_market_substring=args.target,
+        edge_threshold=Decimal(str(args.edge_threshold)),
+    )
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        print("=" * 70)
+        print("MAKER FEE ASYMMETRY SCAN")
+        print("=" * 70)
+        print(f"Scan time: {result['timestamp']}")
+        print(f"Snapshot: {result['snapshot']}")
+        print(f"Signals found: {result['signals_found']}")
+        print(f"Orders posted: {result['orders_posted']}")
+        print(f"Dry run: {result['dry_run']}")
+        print(f"Edge threshold: {result['edge_threshold']:.1%}")
+
+        if result.get("top_signals"):
+            print("\n--- Top Signals ---")
+            for sig in result["top_signals"][:5]:
+                print(f"\n  {sig['question'][:50]}...")
+                print(f"    Direction: {sig['direction']}")
+                print(f"    Market prob: {sig['market_implied_prob']:.2f} | Fair prob: {sig['fair_prob']:.2f}")
+                print(f"    Edge: {sig['edge']:+.2%}")
+                print(f"    Target price: {sig['target_price']:.3f}")
+                print(f"    Maker fee savings: {sig['maker_fee_savings']:.1%}")
+
+        if result.get("performance"):
+            perf = result["performance"]
+            print("\n--- Performance ---")
+            print(f"Total orders posted: {perf['total_orders_posted']}")
+            print(f"Orders filled: {perf['orders_filled']}")
+            print(f"Fill rate: {perf['fill_rate']:.1f}%")
+            print(f"Total PnL: ${perf['total_realized_pnl']:,.2f}")
+            print(f"Fee rate: {perf['fee_rate']:.2f}%")
+
+        print("\n" + "=" * 70)
+
+
+def cmd_maker_fee_backtest(args: argparse.Namespace) -> None:
+    """Backtest maker fee asymmetry strategy."""
+    from decimal import Decimal
+    from pathlib import Path
+
+    from .strategy_maker_fee_asymmetry import run_backtest
+
+    snapshots_dir = Path(args.snapshots_dir)
+    snapshots = sorted(snapshots_dir.glob("snapshot_15m_*.json"))
+
+    if not snapshots:
+        print(json.dumps({"error": f"No 15m snapshots found in {snapshots_dir}"}))
+        return
+
+    result = run_backtest(
+        snapshots=snapshots,
+        edge_threshold=Decimal(str(args.edge_threshold)),
+        spread_buffer=Decimal(str(args.spread_buffer)),
+        position_size=Decimal(str(args.position_size)),
+        target_market_substring=args.target,
+        hold_horizon=args.hold_horizon,
+    )
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        print("=" * 70)
+        print("MAKER FEE ASYMMETRY BACKTEST")
+        print("=" * 70)
+        print(f"Total snapshots: {len(snapshots)}")
+        print(f"Hold horizon: {args.hold_horizon} snapshots")
+        print()
+        print("--- Parameters ---")
+        print(f"Edge threshold: {result['params']['edge_threshold']:.1%}")
+        print(f"Spread buffer: {result['params']['spread_buffer']:.1%}")
+        print(f"Position size: ${result['params']['position_size']:,.2f}")
+        print()
+        print("--- Results ---")
+        print(f"Total trades: {result['total_trades']}")
+        print(f"Winning trades: {result['winning_trades']}")
+        print(f"Win rate: {result['win_rate']:.1f}%")
+        print(f"Total PnL: ${result['total_pnl']:.2f}")
+        print(f"Avg PnL per trade: ${result['avg_pnl_per_trade']:.2f}")
+        print(f"Avg edge at entry: {result['avg_edge_at_entry']:.2%}")
+
+        if result.get("trades"):
+            print("\n--- Recent Trades ---")
+            for trade in result["trades"][-5:]:
+                pnl_str = f"${trade['pnl']:+.2f}"
+                print(f"  {trade['direction']:<10} | {pnl_str:<12} | edge={trade['edge_at_entry']:+.1%} | {trade['market_id'][:30]}")
+
+        print("\n" + "=" * 70)
+
+
+def cmd_maker_fee_performance(args: argparse.Namespace) -> None:
+    """Show maker fee asymmetry strategy performance."""
+    from pathlib import Path
+
+    from .strategy_maker_fee_asymmetry import MakerFeeAsymmetryTracker
+
+    data_dir = Path(args.data_dir) if args.data_dir else None
+    tracker = MakerFeeAsymmetryTracker(data_dir=data_dir)
+    perf = tracker.get_performance()
+    open_orders = tracker.get_open_orders()
+
+    if args.format == "json":
+        print(json.dumps({
+            "performance": perf.to_dict(),
+            "open_orders": [o.to_dict() for o in open_orders],
+        }, indent=2))
+    else:
+        print("=" * 70)
+        print("MAKER FEE ASYMMETRY PERFORMANCE")
+        print("=" * 70)
+
+        print("\n--- Overall Performance ---")
+        print(f"Total orders posted: {perf.total_orders_posted}")
+        print(f"  Filled: {perf.orders_filled}")
+        print(f"  Cancelled: {perf.orders_cancelled}")
+        print(f"  Expired: {perf.orders_expired}")
+        print(f"\nFill rate: {perf.fill_rate:.1f}%")
+        print(f"Total fills: {perf.total_fills}")
+        print(f"Fills with edge: {perf.fills_with_edge}")
+        print("\nPnL:")
+        print(f"  Total realized: ${float(perf.total_realized_pnl):,.2f}")
+        print(f"  Avg per fill: ${float(perf.avg_pnl_per_fill):,.2f}")
+        print(f"  EV per trade: ${float(perf.ev_per_trade):,.2f}")
+        print("\nFees:")
+        print(f"  Total fees paid: ${float(perf.total_fees_paid):,.2f}")
+        print(f"  Fee rate: {perf.fee_rate:.2f}%")
+        print(f"  Total volume: ${float(perf.total_volume):,.2f}")
+
+        if open_orders:
+            print(f"\n--- Open Orders ({len(open_orders)}) ---")
+            for order in open_orders[:10]:
+                print(f"  {order.order_id}")
+                print(f"    Market: {order.signal.question[:40]}...")
+                print(f"    Side: {order.side} | Price: {order.price:.3f} | Size: {order.size:.2f}")
+                print(f"    Edge at entry: {order.signal.edge:+.1%}")
+
+        print("\n" + "=" * 70)
+
+
 def cmd_watchdog(args: argparse.Namespace) -> None:
     """Run collector watchdog to ensure data freshness."""
     from pathlib import Path
@@ -3715,6 +3869,117 @@ def main() -> None:
     )
     do_perf.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
     do_perf.set_defaults(func=cmd_discounted_outcome_performance)
+
+    # Maker Fee Asymmetry commands
+    mf = sub.add_parser(
+        "maker-fee-scan",
+        help="Scan for maker fee asymmetry opportunities (passive liquidity provision)",
+    )
+    mf.add_argument(
+        "--snapshots-dir",
+        type=str,
+        default="data",
+        help="Directory containing market snapshots (default: data)",
+    )
+    mf.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Data directory for storing results",
+    )
+    mf.add_argument(
+        "--max-positions",
+        type=int,
+        default=10,
+        help="Maximum positions to take (default: 10)",
+    )
+    mf.add_argument(
+        "--edge-threshold",
+        type=float,
+        default=0.03,
+        help="Minimum edge threshold (default: 0.03 = 3%%)",
+    )
+    mf.add_argument(
+        "--spread-buffer",
+        type=float,
+        default=0.005,
+        help="Spread buffer (default: 0.005 = 0.5%%)",
+    )
+    mf.add_argument(
+        "--position-size",
+        type=float,
+        default=10.0,
+        help="Position size in USD (default: 10)",
+    )
+    mf.add_argument(
+        "--target",
+        type=str,
+        default="bitcoin",
+        help="Target market substring filter (default: bitcoin)",
+    )
+    mf.add_argument(
+        "--live",
+        action="store_true",
+        help="Execute live trades (default: dry-run)",
+    )
+    mf.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    mf.set_defaults(func=cmd_maker_fee_scan)
+
+    mf_backtest = sub.add_parser(
+        "maker-fee-backtest",
+        help="Backtest maker fee asymmetry strategy on historical snapshots",
+    )
+    mf_backtest.add_argument(
+        "--snapshots-dir",
+        type=str,
+        default="data",
+        help="Directory containing market snapshots (default: data)",
+    )
+    mf_backtest.add_argument(
+        "--edge-threshold",
+        type=float,
+        default=0.03,
+        help="Minimum edge threshold (default: 0.03 = 3%%)",
+    )
+    mf_backtest.add_argument(
+        "--spread-buffer",
+        type=float,
+        default=0.005,
+        help="Spread buffer (default: 0.005 = 0.5%%)",
+    )
+    mf_backtest.add_argument(
+        "--position-size",
+        type=float,
+        default=10.0,
+        help="Position size in USD (default: 10)",
+    )
+    mf_backtest.add_argument(
+        "--target",
+        type=str,
+        default="bitcoin",
+        help="Target market substring filter (default: bitcoin)",
+    )
+    mf_backtest.add_argument(
+        "--hold-horizon",
+        type=int,
+        default=4,
+        help="Number of snapshots to hold (default: 4)",
+    )
+    mf_backtest.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    mf_backtest.set_defaults(func=cmd_maker_fee_backtest)
+
+    mf_perf = sub.add_parser(
+        "maker-fee-performance",
+        help="Show maker fee asymmetry strategy performance",
+    )
+    mf_perf.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Data directory for trade tracking",
+    )
+    mf_perf.add_argument("--format", choices=["json", "human"], default="human", help="Output format")
+    mf_perf.set_defaults(func=cmd_maker_fee_performance)
 
     # Add trader profiling commands
     from .trader_cli import add_trader_commands
