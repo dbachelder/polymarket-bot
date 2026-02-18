@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 class AuthenticationError(Exception):
     """Raised when API authentication fails or credentials are missing."""
 
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_FILLS_PATH = Path("data/fills.jsonl")
@@ -452,7 +453,9 @@ def fetch_account_fills_with_retry(
                             if isinstance(data, list):
                                 fill_list = data
                             elif isinstance(data, dict):
-                                fill_list = data.get("trades", data.get("fills", data.get("data", [])))
+                                fill_list = data.get(
+                                    "trades", data.get("fills", data.get("data", []))
+                                )
                             else:
                                 fill_list = []
 
@@ -493,7 +496,9 @@ def fetch_account_fills_with_retry(
                             break  # Break endpoint loop, outer retry will handle
 
                         else:
-                            logger.warning("Unexpected status %d from %s", resp.status_code, endpoint)
+                            logger.warning(
+                                "Unexpected status %d from %s", resp.status_code, endpoint
+                            )
                             last_error = httpx.HTTPStatusError(
                                 f"Unexpected status: {resp.status_code}",
                                 request=resp.request,
@@ -516,11 +521,15 @@ def fetch_account_fills_with_retry(
 
                     if not _is_retryable_error(status_code, last_error):
                         logger.error("Non-retryable error, giving up: %s", last_error)
-                        _fills_circuit_breaker.record_failure(is_auth_failure=(status_code in (401, 403)))
+                        _fills_circuit_breaker.record_failure(
+                            is_auth_failure=(status_code in (401, 403))
+                        )
                         return fills
 
                     if attempt >= max_retries:
-                        logger.error("Max retries (%d) exceeded, giving up: %s", max_retries, last_error)
+                        logger.error(
+                            "Max retries (%d) exceeded, giving up: %s", max_retries, last_error
+                        )
                         _fills_circuit_breaker.record_failure()
                         return fills
 
@@ -542,6 +551,19 @@ def fetch_account_fills_with_retry(
             logger.exception("Unexpected error fetching fills: %s", e)
             _fills_circuit_breaker.record_failure()
             return fills
+
+    # Log when no fills found after all retries
+    if not fills:
+        since_str = since.isoformat() if since else "beginning"
+        logger.warning(
+            "NO ACCOUNT FILLS FOUND: API returned 0 fills for lookback since=%s. "
+            "This is normal if you have no recent trading activity. "
+            "If you expect fills, check: (1) API credentials are correct, "
+            "(2) Your Polymarket account has trading history, "
+            "(3) The lookback window is appropriate (currently using since=%s).",
+            since_str,
+            since_str,
+        )
 
     return fills
 
@@ -786,7 +808,9 @@ def collect_fills(
     # when last_fill timestamp is stale or there are clock/sync issues
     if since is None:
         since = datetime.now(UTC) - timedelta(hours=lookback_hours)
-        logger.debug("Using fixed lookback window: %.1fh (since=%s)", lookback_hours, since.isoformat())
+        logger.debug(
+            "Using fixed lookback window: %.1fh (since=%s)", lookback_hours, since.isoformat()
+        )
 
     results = {
         "fills_path": str(fills_path),
@@ -844,6 +868,26 @@ def collect_fills(
                     continue
                 all_fills.append(fill)
             results["paper_fills"] = len(paper_fills)
+
+            # Explicit logging for paper fills status
+            if not paper_fills_path.exists():
+                logger.warning(
+                    "PAPER FILLS: File not found at %s. "
+                    "No paper trading fills will be collected. "
+                    "To generate paper fills, run: ./run.sh paper-fill-loop",
+                    paper_fills_path,
+                )
+            elif len(paper_fills) == 0:
+                logger.warning(
+                    "PAPER FILLS: File exists at %s but is empty. "
+                    "No paper trading fills available. "
+                    "To generate paper fills, run: ./run.sh paper-fill-loop",
+                    paper_fills_path,
+                )
+            else:
+                logger.debug(
+                    "PAPER FILLS: Loaded %d paper fills from %s", len(paper_fills), paper_fills_path
+                )
         except Exception as e:
             logger.exception("Error loading paper fills: %s", e)
 
@@ -854,13 +898,35 @@ def collect_fills(
     appended = append_fills(all_fills, fills_path)
     results["total_appended"] = appended
 
-    logger.info(
-        "Collected %d fills (%d account, %d paper, %d duplicates skipped)",
-        appended,
-        results["account_fills"],
-        results["paper_fills"],
-        results["duplicates_skipped"],
-    )
+    # Log collection results with explicit warnings when no fills found
+    if appended == 0:
+        sources = []
+        if include_account:
+            sources.append("account")
+        if include_paper:
+            sources.append("paper")
+        source_str = "+".join(sources) if sources else "none"
+
+        logger.warning(
+            "NO FILLS COLLECTED: 0 new fills from %s sources (lookback=%.1fh). "
+            "Account fills: %d, Paper fills: %d, Duplicates: %d. "
+            "If this persists: (1) Check API credentials for account fills, "
+            "(2) Run './run.sh paper-fill-loop' for paper fills, "
+            "(3) Verify trading activity in Polymarket account.",
+            source_str,
+            lookback_hours,
+            results["account_fills"],
+            results["paper_fills"],
+            results["duplicates_skipped"],
+        )
+    else:
+        logger.info(
+            "Collected %d fills (%d account, %d paper, %d duplicates skipped)",
+            appended,
+            results["account_fills"],
+            results["paper_fills"],
+            results["duplicates_skipped"],
+        )
 
     return results
 
@@ -990,12 +1056,8 @@ def startup_diagnostic() -> dict:
             logger.info("API AUTH OK: Authentication test passed")
         else:
             results["errors"].append(f"API authentication failed: {auth_test['error']}")
-            results["actions_required"].append(
-                "Check that credentials are correct and not expired"
-            )
-            results["actions_required"].append(
-                "Verify API key has necessary permissions"
-            )
+            results["actions_required"].append("Check that credentials are correct and not expired")
+            results["actions_required"].append("Verify API key has necessary permissions")
             logger.error(
                 "API AUTH FAILED: %s (status: %s, endpoint: %s)",
                 auth_test["error"],
@@ -1039,11 +1101,72 @@ def startup_diagnostic() -> dict:
     else:
         logger.info("CIRCUIT BREAKER: CLOSED (normal operation)")
 
+    # Step 5: Check fills sources (account vs paper)
+    logger.info("STEP 5: Checking fills sources...")
+    paper_fills_path = DEFAULT_PAPER_FILLS_PATH
+    has_paper_file = paper_fills_path.exists()
+    paper_fill_count = 0
+    if has_paper_file:
+        try:
+            paper_fill_count = len(load_paper_fills(paper_fills_path))
+        except Exception:
+            pass
+
+    fills_sources = {
+        "account": {
+            "available": results["credentials_ok"] and results["api_auth_ok"],
+            "reason": "API credentials configured and authenticated"
+            if (results["credentials_ok"] and results["api_auth_ok"])
+            else "Missing credentials or auth failed",
+        },
+        "paper": {
+            "available": has_paper_file and paper_fill_count > 0,
+            "reason": (
+                f"Paper fills file exists with {paper_fill_count} fills"
+                if (has_paper_file and paper_fill_count > 0)
+                else (
+                    "Paper fills file exists but is empty"
+                    if has_paper_file
+                    else "Paper fills file does not exist"
+                )
+            ),
+        },
+    }
+
+    available_sources = [name for name, info in fills_sources.items() if info["available"]]
+
+    if not available_sources:
+        logger.error("FILLS SOURCES: NO SOURCES AVAILABLE!")
+        logger.error("  - Account fills: NOT AVAILABLE (%s)", fills_sources["account"]["reason"])
+        logger.error("  - Paper fills: NOT AVAILABLE (%s)", fills_sources["paper"]["reason"])
+        logger.error("ACTION REQUIRED: To collect fills, either:")
+        logger.error("  1. Configure API credentials for account fills:")
+        logger.error("     export POLYMARKET_API_KEY=xxx")
+        logger.error("     export POLYMARKET_API_SECRET=xxx")
+        logger.error("     export POLYMARKET_API_PASSPHRASE=xxx")
+        logger.error("  2. Start paper trading to generate paper fills:")
+        logger.error("     ./run.sh paper-fill-loop")
+        results["errors"].append("No fills sources available (account or paper)")
+        results["actions_required"].append("Configure API credentials OR start paper-fill-loop")
+    elif "account" not in available_sources:
+        logger.warning(
+            "FILLS SOURCES: Account fills unavailable (%s)", fills_sources["account"]["reason"]
+        )
+        logger.warning("  - Paper fills: AVAILABLE (%s)", fills_sources["paper"]["reason"])
+        logger.warning("  Tip: To enable account fills, configure API credentials")
+    elif "paper" not in available_sources:
+        logger.warning(
+            "FILLS SOURCES: Paper fills unavailable (%s)", fills_sources["paper"]["reason"]
+        )
+        logger.warning("  - Account fills: AVAILABLE (%s)", fills_sources["account"]["reason"])
+        logger.warning("  Tip: To generate paper fills, run: ./run.sh paper-fill-loop")
+    else:
+        logger.info("FILLS SOURCES: Both account and paper fills available")
+
+    results["fills_sources"] = fills_sources
+
     logger.info("=" * 60)
-    logger.info(
-        "DIAGNOSTIC COMPLETE - Status: %s",
-        "OK" if results["api_auth_ok"] else "FAILED"
-    )
+    logger.info("DIAGNOSTIC COMPLETE - Status: %s", "OK" if results["api_auth_ok"] else "FAILED")
     logger.info("=" * 60)
 
     return results
