@@ -101,15 +101,32 @@ def extract_features_from_market(
         prior_mid: Previous mid price for computing delta
 
     Returns:
-        ImbalanceFeatures or None if data is insufficient
+        ImbalanceFeatures or None if data is insufficient or market is illiquid
     """
     books = market_data.get("books", {})
     yes_book = books.get("yes", {})
+    no_book = books.get("no", {})
 
     yes_bids = yes_book.get("bids", [])
     yes_asks = yes_book.get("asks", [])
+    no_bids = no_book.get("bids", [])
+    no_asks = no_book.get("asks", [])
 
+    # Skip illiquid markets: require both sides of YES book
     if not yes_bids or not yes_asks:
+        return None
+
+    # Detect pathological one-sided pattern: YES asks-only + NO bids-only
+    yes_has_bids = len(yes_bids) > 0
+    yes_has_asks = len(yes_asks) > 0
+    no_has_bids = len(no_bids) > 0
+    no_has_asks = len(no_asks) > 0
+
+    yes_asks_only = yes_has_asks and not yes_has_bids
+    no_bids_only = no_has_bids and not no_has_asks
+
+    if yes_asks_only and no_bids_only:
+        # Pathological one-sided market - skip trading
         return None
 
     # Top-of-book prices

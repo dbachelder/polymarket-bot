@@ -409,3 +409,140 @@ def test_btc_15m_extreme_pinning_scenario():
     assert any("YES best ask pinned at extreme: 0.98" in a for a in alerts)
     assert any("NO best bid pinned at extreme: 0.02" in a for a in alerts)
     assert any("NO best ask pinned at extreme: 0.98" in a for a in alerts)
+
+
+def test_one_sided_book_detection():
+    """Test detection of one-sided books (YES asks-only / NO bids-only)."""
+    # Pathological case from ticket: YES only has asks, NO only has bids
+    market_data = {
+        "title": "Bitcoin Up or Down - 15 min",
+        "market_id": "1375837",
+        "event_id": "208612",
+        "last_trade_price": 0.85,
+        "books": {
+            "yes": {
+                # YES has only asks (sellers) at 0.99, no bids
+                "bids": [],
+                "asks": [
+                    {"price": "0.99", "size": "15600"},
+                    {"price": "0.98", "size": "12000"},
+                ],
+            },
+            "no": {
+                # NO has only bids (buyers) at 0.01, no asks
+                "bids": [
+                    {"price": "0.01", "size": "15600"},
+                    {"price": "0.02", "size": "12000"},
+                ],
+                "asks": [],
+            },
+        },
+    }
+
+    result = analyze_market_microstructure(market_data, depth_levels=10)
+
+    # Check YES metrics - one sided (asks only)
+    # Asks sorted ascending -> best_ask is LOWEST (0.98)
+    yes = result["yes"]
+    assert yes["best_bid"] is None
+    assert yes["best_ask"] == 0.98  # Lowest ask
+    assert yes["spread"] is None  # No spread without both sides
+    assert yes["is_one_sided"] is True
+    assert yes["best_level_size"] == 27600.0  # 15600 + 12000
+
+    # Check NO metrics - one sided (bids only)
+    # Bids sorted descending -> best_bid is HIGHEST (0.02)
+    no = result["no"]
+    assert no["best_bid"] == 0.02  # Highest bid
+    assert no["best_ask"] is None
+    assert no["spread"] is None
+    assert no["is_one_sided"] is True
+    assert no["best_level_size"] == 27600.0  # 15600 + 12000
+
+    # Check illiquidity detection
+    illiquidity = result["illiquidity"]
+    assert illiquidity["is_illiquid"] is True
+    assert illiquidity["is_pathological_one_sided"] is True
+    assert illiquidity["yes_asks_only"] is True
+    assert illiquidity["no_bids_only"] is True
+    assert illiquidity["best_yes_ask"] == 0.98  # Lowest ask
+    assert illiquidity["best_no_bid"] == 0.02  # Highest bid
+    assert illiquidity["yes_ask_size"] == 27600.0
+    assert illiquidity["no_bid_size"] == 27600.0
+    assert illiquidity["last_trade_price"] == 0.85
+
+
+def test_one_sided_book_summary_stats(tmp_path: Path):
+    """Test that summary includes illiquidity stats for one-sided books."""
+    snapshot = {
+        "markets": [
+            {
+                "title": "Bitcoin Up or Down - 15 min",
+                "market_id": "btc-1",
+                "event_id": "evt-1",
+                "last_trade_price": 0.50,
+                "books": {
+                    "yes": {
+                        # One-sided: asks only
+                        "bids": [],
+                        "asks": [{"price": "0.99", "size": "15000"}],
+                    },
+                    "no": {
+                        # One-sided: bids only
+                        "bids": [{"price": "0.01", "size": "15000"}],
+                        "asks": [],
+                    },
+                },
+            },
+            {
+                "title": "Bitcoin Up or Down - 15 min (2)",
+                "market_id": "btc-2",
+                "event_id": "evt-2",
+                "last_trade_price": 0.55,
+                "books": {
+                    "yes": {
+                        # Normal two-sided book
+                        "bids": [{"price": "0.52", "size": "1000"}],
+                        "asks": [{"price": "0.54", "size": "1000"}],
+                    },
+                    "no": {
+                        # Normal two-sided book
+                        "bids": [{"price": "0.46", "size": "1000"}],
+                        "asks": [{"price": "0.48", "size": "1000"}],
+                    },
+                },
+            },
+        ],
+    }
+
+    snapshot_path = tmp_path / "snapshot.json"
+    snapshot_path.write_text(json.dumps(snapshot))
+
+    summary = generate_microstructure_summary(
+        snapshot_path=snapshot_path,
+        target_market_substring="bitcoin",
+        spread_threshold=0.50,
+        extreme_pin_threshold=0.05,
+        depth_levels=10,
+    )
+
+    # Check illiquidity stats
+    illiquidity = summary["illiquidity"]
+    assert illiquidity["total_markets"] == 2
+    assert illiquidity["illiquid_count"] == 1
+    assert illiquidity["one_sided_count"] == 1
+    assert illiquidity["pathological_count"] == 1
+    assert illiquidity["pct_illiquid"] == 50.0
+    assert illiquidity["pct_one_sided"] == 50.0
+    assert illiquidity["pct_pathological"] == 50.0
+
+    # Check details
+    assert len(illiquidity["details"]) == 1
+    detail = illiquidity["details"][0]
+    assert detail["market_id"] == "btc-1"
+    assert detail["is_pathological"] is True
+    assert detail["best_yes_ask"] == 0.99  # Only ask level available
+    assert detail["best_no_bid"] == 0.01  # Only bid level available
+    assert detail["yes_ask_size"] == 15000.0
+    assert detail["no_bid_size"] == 15000.0
+    assert detail["last_trade_price"] == 0.50
