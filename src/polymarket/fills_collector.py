@@ -30,6 +30,7 @@ import httpx
 from .config import load_config
 from .endpoints import CLOB_BASE
 from .pnl import Fill
+from .trading import _build_auth_headers
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -431,7 +432,6 @@ def fetch_account_fills_with_retry(
 
         try:
             with _client() as client:
-                headers = _auth_headers(config)
 
                 # The CLOB API endpoint for fills/trades
                 params: dict[str, str | int] = {"limit": limit}
@@ -444,6 +444,9 @@ def fetch_account_fills_with_retry(
 
                 for endpoint in endpoints_to_try:
                     try:
+                        # Use signature-based auth headers (required for account endpoints)
+                        headers = _build_auth_headers(config, method="GET", request_path=endpoint)
+                        headers["User-Agent"] = "polymarket-bot/0.1"
                         resp = client.get(endpoint, params=params, headers=headers)
 
                         if resp.status_code == 200:
