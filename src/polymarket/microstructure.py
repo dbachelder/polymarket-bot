@@ -29,7 +29,8 @@ def _compute_book_metrics(
     """Compute microstructure metrics for a single side (YES or NO) book.
 
     Returns:
-        Dict with best_bid, best_ask, spread, bid_depth, ask_depth, imbalance
+        Dict with best_bid, best_ask, spread, bid_depth, ask_depth, imbalance,
+        is_one_sided, best_level_size
     """
     # Sort bids descending (highest first), asks ascending (lowest first)
     sorted_bids = sorted(bids, key=lambda x: _to_float(x["price"]), reverse=True)
@@ -57,6 +58,17 @@ def _compute_book_metrics(
         if total_depth > 0:
             imbalance = (bid_depth - ask_depth) / total_depth
 
+    # Detect one-sided book (no bids or no asks)
+    is_one_sided = (not bids) or (not asks)
+
+    # Best level size (for one-sided books, this is the size at the only available side)
+    best_level_size = None
+    if is_one_sided:
+        if bids and not asks:
+            best_level_size = bid_depth
+        elif asks and not bids:
+            best_level_size = ask_depth
+
     return {
         "best_bid": best_bid,
         "best_ask": best_ask,
@@ -64,6 +76,8 @@ def _compute_book_metrics(
         "bid_depth": bid_depth,
         "ask_depth": ask_depth,
         "imbalance": imbalance,
+        "is_one_sided": is_one_sided,
+        "best_level_size": best_level_size,
     }
 
 
@@ -289,6 +303,59 @@ def check_alerts(
     return alerts
 
 
+def _detect_illiquidity(
+    yes_metrics: dict[str, Any],
+    no_metrics: dict[str, Any],
+    last_trade_price: float | None = None,
+) -> dict[str, Any]:
+    """Detect illiquidity conditions in the combined YES/NO books.
+
+    The pathological case: YES has only asks (no bids) and NO has only bids (no asks).
+    This indicates a one-sided, maker-signal-only market.
+
+    Args:
+        yes_metrics: Metrics from YES book
+        no_metrics: Metrics from NO book
+        last_trade_price: Optional last trade price for context
+
+    Returns:
+        Dict with illiquidity flags and summary data
+    """
+    yes_one_sided = yes_metrics.get("is_one_sided", False)
+    no_one_sided = no_metrics.get("is_one_sided", False)
+
+    # Pathological case: YES asks-only + NO bids-only
+    yes_has_bids = yes_metrics.get("best_bid") is not None
+    yes_has_asks = yes_metrics.get("best_ask") is not None
+    no_has_bids = no_metrics.get("best_bid") is not None
+    no_has_asks = no_metrics.get("best_ask") is not None
+
+    # YES asks-only: has asks but no bids
+    yes_asks_only = yes_has_asks and not yes_has_bids
+    # NO bids-only: has bids but no asks
+    no_bids_only = no_has_bids and not no_has_asks
+
+    # The specific pathological pattern from the ticket
+    is_pathological_one_sided = yes_asks_only and no_bids_only
+
+    # General one-sided detection (any book is one-sided)
+    is_fully_one_sided = yes_one_sided or no_one_sided
+
+    return {
+        "is_illiquid": is_pathological_one_sided or is_fully_one_sided,
+        "is_pathological_one_sided": is_pathological_one_sided,
+        "yes_asks_only": yes_asks_only,
+        "no_bids_only": no_bids_only,
+        "yes_is_one_sided": yes_one_sided,
+        "no_is_one_sided": no_one_sided,
+        "best_yes_ask": yes_metrics.get("best_ask"),
+        "best_no_bid": no_metrics.get("best_bid"),
+        "yes_ask_size": yes_metrics.get("ask_depth") if yes_asks_only else None,
+        "no_bid_size": no_metrics.get("bid_depth") if no_bids_only else None,
+        "last_trade_price": last_trade_price,
+    }
+
+
 def analyze_market_microstructure(
     market_data: dict[str, Any],
     depth_levels: int = DEFAULT_DEPTH_LEVELS,
@@ -318,6 +385,10 @@ def analyze_market_microstructure(
     # Compute implied probabilities
     implied_probs = _compute_implied_probabilities(yes_metrics, no_metrics)
 
+    # Detect illiquidity
+    last_trade_price = market_data.get("last_trade_price")
+    illiquidity = _detect_illiquidity(yes_metrics, no_metrics, last_trade_price)
+
     result = {
         "market_title": market_data.get("title", market_data.get("question", "Unknown")),
         "market_id": market_data.get("market_id"),
@@ -326,6 +397,7 @@ def analyze_market_microstructure(
         "yes": yes_metrics,
         "no": no_metrics,
         "implied_probabilities": implied_probs,
+        "illiquidity": illiquidity,
     }
 
     return result
@@ -391,6 +463,12 @@ def generate_microstructure_summary(
     all_alerts = []
     market_summaries = []
 
+    # Illiquidity tracking across all markets
+    illiquid_count = 0
+    one_sided_count = 0
+    pathological_count = 0
+    illiquidity_details: list[dict[str, Any]] = []
+
     for analysis in analyses:
         market_summary = {
             "market_title": analysis["market_title"],
@@ -406,6 +484,7 @@ def generate_microstructure_summary(
         market_summary["yes_imbalance"] = yes.get("imbalance")
         market_summary["yes_best_bid"] = yes.get("best_bid")
         market_summary["yes_best_ask"] = yes.get("best_ask")
+        market_summary["yes_is_one_sided"] = yes.get("is_one_sided", False)
 
         # Add NO metrics
         no = analysis.get("no", {})
@@ -415,6 +494,7 @@ def generate_microstructure_summary(
         market_summary["no_imbalance"] = no.get("imbalance")
         market_summary["no_best_bid"] = no.get("best_bid")
         market_summary["no_best_ask"] = no.get("best_ask")
+        market_summary["no_is_one_sided"] = no.get("is_one_sided", False)
 
         # Add implied probabilities
         implied = analysis.get("implied_probabilities")
@@ -423,6 +503,33 @@ def generate_microstructure_summary(
             market_summary["implied_no_mid"] = implied.get("no_mid")
             market_summary["implied_sum"] = implied.get("mid_sum")
             market_summary["consistency_diff"] = implied.get("consistency_diff")
+
+        # Add illiquidity info
+        illiquidity = analysis.get("illiquidity", {})
+        market_summary["is_illiquid"] = illiquidity.get("is_illiquid", False)
+        market_summary["is_pathological_one_sided"] = illiquidity.get(
+            "is_pathological_one_sided", False
+        )
+
+        # Track illiquidity stats
+        if illiquidity.get("is_illiquid", False):
+            illiquid_count += 1
+            illiquidity_details.append(
+                {
+                    "market_title": analysis["market_title"],
+                    "market_id": analysis["market_id"],
+                    "is_pathological": illiquidity.get("is_pathological_one_sided", False),
+                    "best_yes_ask": illiquidity.get("best_yes_ask"),
+                    "best_no_bid": illiquidity.get("best_no_bid"),
+                    "yes_ask_size": illiquidity.get("yes_ask_size"),
+                    "no_bid_size": illiquidity.get("no_bid_size"),
+                    "last_trade_price": illiquidity.get("last_trade_price"),
+                }
+            )
+            if illiquidity.get("is_pathological_one_sided", False):
+                pathological_count += 1
+        if yes.get("is_one_sided", False) or no.get("is_one_sided", False):
+            one_sided_count += 1
 
         market_summaries.append(market_summary)
 
@@ -437,6 +544,19 @@ def generate_microstructure_summary(
         )
         all_alerts.extend(alerts)
 
+    # Compute illiquidity percentages
+    total_markets = len(analyses)
+    illiquidity_stats = {
+        "total_markets": total_markets,
+        "illiquid_count": illiquid_count,
+        "one_sided_count": one_sided_count,
+        "pathological_count": pathological_count,
+        "pct_illiquid": (illiquid_count / total_markets * 100) if total_markets > 0 else 0,
+        "pct_one_sided": (one_sided_count / total_markets * 100) if total_markets > 0 else 0,
+        "pct_pathological": (pathological_count / total_markets * 100) if total_markets > 0 else 0,
+        "details": illiquidity_details,
+    }
+
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "snapshot_path": str(snapshot_path),
@@ -449,6 +569,7 @@ def generate_microstructure_summary(
         "market_summaries": market_summaries,
         "alerts": all_alerts,
         "alert_count": len(all_alerts),
+        "illiquidity": illiquidity_stats,
     }
 
 

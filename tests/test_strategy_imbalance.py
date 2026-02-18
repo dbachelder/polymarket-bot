@@ -148,6 +148,52 @@ class TestExtractFeaturesFromMarket:
         result = extract_features_from_market(market_data)
         assert result is None
 
+    def test_returns_none_for_one_sided_pathological_book(self) -> None:
+        """Test that pathological one-sided books are skipped (YES asks-only + NO bids-only)."""
+        market_data = {
+            "market_id": "test-123",
+            "title": "Bitcoin UP 15m",
+            "books": {
+                "yes": {
+                    # YES has only asks (no bids) - pathological
+                    "bids": [],
+                    "asks": [{"price": "0.99", "size": "15000"}],
+                },
+                "no": {
+                    # NO has only bids (no asks) - pathological
+                    "bids": [{"price": "0.01", "size": "15000"}],
+                    "asks": [],
+                },
+            },
+        }
+
+        result = extract_features_from_market(market_data)
+        assert result is None
+
+    def test_extracts_features_when_yes_has_both_sides(self) -> None:
+        """Test that normal books with both sides on YES are processed."""
+        market_data = {
+            "market_id": "test-123",
+            "title": "Bitcoin UP 15m",
+            "books": {
+                "yes": {
+                    # YES has both sides - normal
+                    "bids": [{"price": "0.60", "size": "1000"}],
+                    "asks": [{"price": "0.62", "size": "1000"}],
+                },
+                "no": {
+                    # NO may be one-sided but YES is what matters
+                    "bids": [{"price": "0.38", "size": "1000"}],
+                    "asks": [],
+                },
+            },
+        }
+
+        result = extract_features_from_market(market_data)
+        assert result is not None
+        assert result.best_bid_yes == 0.60
+        assert result.best_ask_yes == 0.62
+
     def test_computes_mid_delta(self) -> None:
         market_data = {
             "market_id": "test-123",
