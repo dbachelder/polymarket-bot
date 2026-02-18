@@ -1,0 +1,20 @@
+[Unit]
+Description=Polymarket Collect Fills Loop
+After=network.target
+
+[Service]
+Type=simple
+User=dan
+WorkingDirectory=/home/dan/src/polymarket-bot
+Environment="PATH=/home/dan/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="HOME=/home/dan"
+
+# Load credentials from 1Password and run the loop
+ExecStartPre=/bin/bash -c 'eval $(op signin --account my --raw 2>/dev/null || true)'
+ExecStart=/bin/bash -c 'eval $(/home/dan/.local/bin/op signin --account my --raw 2>/dev/null); source /home/dan/src/polymarket-bot/scripts/load-env-from-1password.sh && /home/dan/src/polymarket-bot/.venv/bin/python -m polymarket.cli collect-fills-loop --interval-seconds 300 --stale-alert-hours 6 --no-account --paper'
+
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
