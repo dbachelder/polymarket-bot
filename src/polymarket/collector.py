@@ -34,15 +34,20 @@ def collect_5m_snapshot(out_dir: Path) -> Path:
 
     for m in markets:
         yes_id, no_id = m.clob_token_ids
-        payload["markets"].append(
-            {
-                **asdict(m),
-                "books": {
-                    "yes": get_book(yes_id),
-                    "no": get_book(no_id),
-                },
-            }
-        )
+        try:
+            payload["markets"].append(
+                {
+                    **asdict(m),
+                    "books": {
+                        "yes": get_book(yes_id),
+                        "no": get_book(no_id),
+                    },
+                }
+            )
+        except Exception as e:
+            # Skip markets with invalid token IDs (404s, etc.)
+            print(f"Skipping market {m.slug} ({m.question}): {e}")
+            continue
 
     out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
     return out_path
@@ -67,15 +72,20 @@ def collect_15m_snapshot(out_dir: Path) -> Path:
 
     for ev in events:
         yes_id, no_id = ev.clob_token_ids
-        payload["markets"].append(
-            {
-                **asdict(ev),
-                "books": {
-                    "yes": get_book(yes_id),
-                    "no": get_book(no_id),
-                },
-            }
-        )
+        try:
+            payload["markets"].append(
+                {
+                    **asdict(ev),
+                    "books": {
+                        "yes": get_book(yes_id),
+                        "no": get_book(no_id),
+                    },
+                }
+            )
+        except Exception as e:
+            # Skip markets with invalid token IDs (404s, etc.)
+            print(f"Skipping market {ev.slug} ({ev.question}): {e}")
+            continue
 
     out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
     return out_path
