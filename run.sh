@@ -47,6 +47,10 @@ case "${1:-}" in
         shift
         $PYTHON -m polymarket.cli health-check "$@"
         ;;
+    test-auth)
+        shift
+        $PYTHON -m polymarket.cli test-auth "$@"
+        ;;
     collect-fills)
         shift
         $PYTHON -m polymarket.cli collect-fills "$@"
@@ -144,6 +148,7 @@ case "${1:-}" in
         echo "  pnl-verify         Verify PnL from fills data"
         echo "  tests              Run pytest test suite"
         echo "  health-check       Check collector health and staleness"
+        echo "  test-auth          Test API credentials and authentication"
         echo "  collect-fills      Collect fills from paper + real account"
         echo "  collect-fills-loop Continuously collect fills with staleness alerts"
         echo "  pnl-loop           Run PnL collection/verification loop"

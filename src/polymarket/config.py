@@ -82,6 +82,29 @@ class PolymarketConfig:
 
             for env_path in search_paths:
                 if env_path.exists():
+                    # Check for empty credential values in .env before loading
+                    # This helps diagnose credential issues early
+                    try:
+                        env_content = env_path.read_text()
+                        empty_creds = []
+                        for line in env_content.splitlines():
+                            if line.startswith("POLYMARKET_API_KEY=") and len(line.split("=", 1)[1].strip()) == 0:
+                                empty_creds.append("POLYMARKET_API_KEY")
+                            if line.startswith("POLYMARKET_API_SECRET=") and len(line.split("=", 1)[1].strip()) == 0:
+                                empty_creds.append("POLYMARKET_API_SECRET")
+                            if line.startswith("POLYMARKET_API_PASSPHRASE=") and len(line.split("=", 1)[1].strip()) == 0:
+                                empty_creds.append("POLYMARKET_API_PASSPHRASE")
+                        if empty_creds:
+                            logger.warning(
+                                "CONFIG: Found empty credential values in %s: %s. "
+                                "Run 'source ./scripts/load-env-from-1password.sh' to load from 1Password, "
+                                "or populate the .env file with valid credentials.",
+                                loaded_env_path,
+                                ", ".join(empty_creds),
+                            )
+                    except Exception:
+                        pass  # Ignore errors reading .env file
+
                     # Load WITHOUT override - existing env vars take precedence
                     # This prevents empty values in .env from overriding real credentials
                     load_dotenv(env_path, override=False)
