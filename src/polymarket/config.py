@@ -99,7 +99,7 @@ class PolymarketConfig:
                                 "CONFIG: Found empty credential values in %s: %s. "
                                 "Run 'source ./scripts/load-env-from-1password.sh' to load from 1Password, "
                                 "or populate the .env file with valid credentials.",
-                                loaded_env_path,
+                                env_path,
                                 ", ".join(empty_creds),
                             )
                     except Exception:
