@@ -23,7 +23,7 @@ DEFAULT_FILLS_PATH = Path("data/fills.jsonl")
 DEFAULT_STATE_PATH = Path("data/paper_trading/fills_monitor_state.json")
 
 # Configurable thresholds
-STALE_HOURS = 12  # Consider fills stale after 12 hours (was 6)
+STALE_HOURS = 6  # Consider fills stale after 6 hours
 MIN_CHEAP_PRICE = Decimal("0.01")  # Don't go below 1 cent
 MAX_CHEAP_PRICE = Decimal("0.25")  # Don't go above 25 cents
 MIN_WINDOW_SECONDS = 60  # Minimum 1 minute window
