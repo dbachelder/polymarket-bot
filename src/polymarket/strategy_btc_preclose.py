@@ -390,6 +390,9 @@ def run_btc_preclose_paper(
                 entry["no_ask"],
             )
 
+    # Update last run timestamp for fills_loop fail-safe tracking
+    _update_btc_preclose_last_run(data_dir)
+
     return {
         "timestamp": now.isoformat(),
         "window_seconds": window_seconds,
@@ -407,6 +410,21 @@ def run_btc_preclose_paper(
             for reason in set(nm["reason"] for nm in near_misses)
         } if near_misses else {},
     }
+
+
+def _update_btc_preclose_last_run(data_dir: Path) -> None:
+    """Update timestamp file for fills_loop fail-safe tracking.
+
+    Args:
+        data_dir: Data directory to write state file
+    """
+    state_file = data_dir / "btc_preclose_last_run.txt"
+    try:
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        state_file.write_text(datetime.now(UTC).isoformat())
+        logger.debug("Updated btc_preclose_last_run state file")
+    except OSError as e:
+        logger.warning("Failed to write btc_preclose state file: %s", e)
 
 
 def run_btc_preclose_loop(

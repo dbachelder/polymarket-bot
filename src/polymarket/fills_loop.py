@@ -7,9 +7,10 @@ This ensures fills.jsonl stays current even when pnl-loop has window logic issue
 from __future__ import annotations
 
 import logging
+import os
 import random
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -32,6 +33,11 @@ WIDEN_FACTOR = 1.15  # 15% increase per adjustment
 WIDEN_JITTER = 0.05  # +/- 5% jitter
 MAX_LOOKBACK_MULTIPLIER = 3.0  # Max 3x original lookback
 
+# Fail-safe thresholds for forced collection when stale
+FAILSAFE_MAX_LOOKBACK_MULTIPLIER = 5.0  # Widen to 5x during failsafe
+EMPTY_CYCLE_ALERT_THRESHOLD = 2  # Alert after 2 consecutive empty cycles
+BTC_PRECLOSE_STATE_FILE = "btc_preclose_last_run.txt"
+
 
 def _send_openclaw_notification(message: str) -> None:
     """Emit OpenClaw notification via gateway if available.
@@ -46,6 +52,86 @@ def _send_openclaw_notification(message: str) -> None:
     except Exception:
         # Fallback: just log prominently
         logger.warning("[OpenClaw Notification] %s", message)
+
+
+def _log_env_verification() -> dict:
+    """Log environment configuration verification for cron context debugging.
+
+    Returns:
+        Dict with env verification status
+    """
+    env_status = {
+        "POLYMARKET_API_KEY": "set" if os.getenv("POLYMARKET_API_KEY") else "NOT SET",
+        "POLYMARKET_API_SECRET": "set" if os.getenv("POLYMARKET_API_SECRET") else "NOT SET",
+        "POLYMARKET_API_PASSPHRASE": "set" if os.getenv("POLYMARKET_API_PASSPHRASE") else "NOT SET",
+        "POLYMARKET_DRY_RUN": os.getenv("POLYMARKET_DRY_RUN", "not set"),
+        "PATH": os.getenv("PATH", "not set"),
+        "VIRTUAL_ENV": os.getenv("VIRTUAL_ENV", "not set"),
+        "PWD": os.getenv("PWD", "not set"),
+    }
+
+    logger.info("=" * 60)
+    logger.info("ENVIRONMENT VERIFICATION (cron context check)")
+    logger.info("=" * 60)
+    for key, value in env_status.items():
+        if key in ("POLYMARKET_API_KEY", "POLYMARKET_API_SECRET", "POLYMARKET_API_PASSPHRASE"):
+            # Mask sensitive values
+            masked = "****" + value[-4:] if len(value) > 4 and value != "NOT SET" else value
+            logger.info("  %s: %s", key, masked)
+        else:
+            logger.info("  %s: %s", key, value)
+    logger.info("=" * 60)
+
+    # Check for common cron issues
+    warnings = []
+    if env_status["POLYMARKET_API_KEY"] == "NOT SET":
+        warnings.append("POLYMARKET_API_KEY not set - .env file may not be loaded in cron context")
+    if env_status["POLYMARKET_API_SECRET"] == "NOT SET":
+        warnings.append("POLYMARKET_API_SECRET not set - .env file may not be loaded in cron context")
+    if env_status["POLYMARKET_API_PASSPHRASE"] == "NOT SET":
+        warnings.append("POLYMARKET_API_PASSPHRASE not set - .env file may not be loaded in cron context")
+
+    if warnings:
+        logger.warning("ENVIRONMENT WARNINGS:")
+        for warning in warnings:
+            logger.warning("  - %s", warning)
+
+    return {"status": "verified", "warnings": warnings, "env": env_status}
+
+
+def _get_btc_preclose_last_run(data_dir: Path) -> datetime | None:
+    """Get timestamp of last btc-preclose run from state file.
+
+    Args:
+        data_dir: Data directory containing state file
+
+    Returns:
+        Timestamp of last run, or None if never run
+    """
+    state_file = data_dir / BTC_PRECLOSE_STATE_FILE
+    if not state_file.exists():
+        return None
+
+    try:
+        content = state_file.read_text().strip()
+        return datetime.fromisoformat(content)
+    except (ValueError, OSError) as e:
+        logger.warning("Failed to read btc-preclose state file: %s", e)
+        return None
+
+
+def _update_btc_preclose_last_run(data_dir: Path) -> None:
+    """Update timestamp of last btc-preclose run.
+
+    Args:
+        data_dir: Data directory to write state file
+    """
+    state_file = data_dir / BTC_PRECLOSE_STATE_FILE
+    try:
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        state_file.write_text(datetime.now(UTC).isoformat())
+    except OSError as e:
+        logger.warning("Failed to write btc-preclose state file: %s", e)
 
 
 def check_fills_staleness(
@@ -142,6 +228,9 @@ def run_collect_fills_loop(
     Automatically widens collection thresholds if no fills received for
     extended periods (stale detection with auto-adjust).
 
+    Includes fail-safe: If fills are >6h stale AND btc-preclose hasn't fired,
+    forces collection with relaxed thresholds (wider lookback).
+
     Args:
         data_dir: Base data directory
         fills_path: Output path for fills.jsonl
@@ -169,6 +258,9 @@ def run_collect_fills_loop(
     current_lookback = original_lookback
     last_fill_at: datetime | None = None
 
+    # Track consecutive empty cycles for alerting
+    consecutive_empty_cycles = 0
+
     logger.info(
         "Starting collect-fills loop: interval=%.0fs lookback=%.0fh account=%s paper=%s",
         interval_seconds,
@@ -176,6 +268,15 @@ def run_collect_fills_loop(
         include_account,
         include_paper,
     )
+
+    # Verify environment configuration (important for cron context)
+    env_verification = _log_env_verification()
+    if env_verification.get("warnings"):
+        logger.warning(
+            "Environment verification found %d warnings - "
+            ".env file may not be loaded in cron context",
+            len(env_verification["warnings"]),
+        )
 
     # Run startup diagnostic to verify credentials
     if include_account:
@@ -205,6 +306,37 @@ def run_collect_fills_loop(
                     original_lookback,
                 )
 
+            # Check for fail-safe condition: fills stale AND btc-preclose hasn't fired
+            # Use file's last fill time for failsafe check (more accurate than in-memory)
+            summary_for_failsafe = get_fills_summary(fills_path)
+            file_last_fill_at = None
+            if summary_for_failsafe.get("last_fill_at"):
+                file_last_fill_at = datetime.fromisoformat(summary_for_failsafe["last_fill_at"])
+
+            btc_preclose_last_run = _get_btc_preclose_last_run(data_dir)
+            failsafe_triggered = False
+            failsafe_lookback = current_lookback
+
+            if file_last_fill_at is not None:
+                hours_since_last_fill = (datetime.now(UTC) - file_last_fill_at).total_seconds() / 3600
+                hours_since_btc_preclose = (
+                    (datetime.now(UTC) - btc_preclose_last_run).total_seconds() / 3600
+                    if btc_preclose_last_run
+                    else float("inf")
+                )
+
+                # Fail-safe: if fills >6h stale AND btc-preclose hasn't fired recently
+                if hours_since_last_fill > STALE_THRESHOLD_HOURS and hours_since_btc_preclose > STALE_THRESHOLD_HOURS:
+                    failsafe_lookback = original_lookback * FAILSAFE_MAX_LOOKBACK_MULTIPLIER
+                    failsafe_triggered = True
+                    logger.warning(
+                        "FAILSAFE TRIGGERED: Last fill %.1fh ago, btc-preclose last ran %.1fh ago. "
+                        "Forcing collection with relaxed lookback: %.1fh",
+                        hours_since_last_fill,
+                        hours_since_btc_preclose,
+                        failsafe_lookback,
+                    )
+
             # Collect fills (pass iteration for heartbeat logging)
             logger.debug("Iteration %d: collecting fills...", iteration)
             collect_result = collect_fills(
@@ -212,7 +344,7 @@ def run_collect_fills_loop(
                 paper_fills_path=paper_fills_path,
                 include_account=include_account,
                 include_paper=include_paper,
-                lookback_hours=current_lookback,
+                lookback_hours=failsafe_lookback if failsafe_triggered else current_lookback,
                 iteration=iteration,
                 last_heartbeat_time=last_heartbeat_time,
             )
@@ -221,13 +353,44 @@ def run_collect_fills_loop(
             if collect_result.get("heartbeat_logged"):
                 last_heartbeat_time = time.time()
 
+            # Track consecutive empty cycles
+            if collect_result["total_appended"] == 0:
+                consecutive_empty_cycles += 1
+                logger.info(
+                    "Empty cycle #%d (threshold: %d)",
+                    consecutive_empty_cycles,
+                    EMPTY_CYCLE_ALERT_THRESHOLD,
+                )
+
+                # Alert if we've had >2 consecutive empty cycles
+                if consecutive_empty_cycles > EMPTY_CYCLE_ALERT_THRESHOLD:
+                    alert_msg = (
+                        f"🚨 Polymarket fills collector returned empty "
+                        f"for {consecutive_empty_cycles} consecutive cycles. "
+                        f"Check API connectivity and market conditions."
+                    )
+                    logger.error(alert_msg)
+                    if on_stale_alert:
+                        on_stale_alert(alert_msg)
+                    else:
+                        _send_openclaw_notification(alert_msg)
+            else:
+                # Reset empty cycle counter on successful collection
+                if consecutive_empty_cycles > 0:
+                    logger.info(
+                        "Resetting empty cycle counter after %d empty cycles",
+                        consecutive_empty_cycles,
+                    )
+                consecutive_empty_cycles = 0
+
             # Log collection results
             logger.info(
-                "Collected %d fills (%d account, %d paper, %d duplicates)",
+                "Collected %d fills (%d account, %d paper, %d duplicates)%s",
                 collect_result["total_appended"],
                 collect_result["account_fills"],
                 collect_result["paper_fills"],
                 collect_result["duplicates_skipped"],
+                " [FAILSAFE]" if failsafe_triggered else "",
             )
 
             # Reset lookback if we got new fills

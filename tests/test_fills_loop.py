@@ -399,3 +399,264 @@ class TestRunCollectFillsLoop:
 
             # Verify custom callback was called instead of default
             custom_callback.assert_called_once()
+
+
+class TestEnvVerification:
+    """Tests for environment verification."""
+
+    @patch("polymarket.fills_loop._log_env_verification")
+    @patch("polymarket.fills_loop.collect_fills")
+    @patch("polymarket.fills_loop.time.sleep")
+    @patch("polymarket.fills_loop.time.time")
+    def test_env_verification_called_on_startup(
+        self, mock_time, mock_sleep, mock_collect_fills, mock_env_verification
+    ):
+        """Test that environment verification is called on startup."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+
+            mock_env_verification.return_value = {"status": "verified", "warnings": []}
+            mock_time.side_effect = [0.0, 1.0, 2.0, 3.0]
+            mock_collect_fills.return_value = {
+                "total_appended": 0,
+                "account_fills": 0,
+                "paper_fills": 0,
+                "duplicates_skipped": 0,
+                "heartbeat_logged": False,
+            }
+
+            with pytest.raises(StopIteration):
+                mock_sleep.side_effect = StopIteration()
+                run_collect_fills_loop(data_dir=data_dir)
+
+            # Verify env verification was called
+            mock_env_verification.assert_called_once()
+
+
+class TestEmptyCycleAlert:
+    """Tests for empty cycle alerting."""
+
+    @patch("polymarket.fills_loop.collect_fills")
+    @patch("polymarket.fills_loop.time.sleep")
+    @patch("polymarket.fills_loop.time.time")
+    @patch("polymarket.fills_loop._send_openclaw_notification")
+    def test_alert_after_three_empty_cycles(
+        self, mock_notify, mock_time, mock_sleep, mock_collect_fills
+    ):
+        """Test that alert is sent after >2 consecutive empty cycles."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            fills_path = data_dir / "fills.jsonl"
+
+            # Create a fresh fill to avoid stale alert interfering
+            fill = {
+                "token_id": "test-token",
+                "side": "buy",
+                "size": "100",
+                "price": "0.5",
+                "timestamp": datetime.now(UTC).isoformat(),
+                "transaction_hash": "tx1",
+                "market_slug": "test-market",
+            }
+            fills_path.parent.mkdir(parents=True, exist_ok=True)
+            fills_path.write_text(json.dumps(fill) + "\n")
+
+            # Track iterations
+            iteration = 0
+
+            def side_effect(*args, **kwargs):
+                nonlocal iteration
+                iteration += 1
+                if iteration >= 4:  # Exit after 4 iterations
+                    raise StopIteration()
+                return {
+                    "total_appended": 0,
+                    "account_fills": 0,
+                    "paper_fills": 0,
+                    "duplicates_skipped": 0,
+                    "heartbeat_logged": False,
+                }
+
+            mock_collect_fills.side_effect = side_effect
+            mock_sleep.side_effect = [None, None, None, StopIteration()]
+            mock_time.side_effect = [
+                0.0,
+                1.0,
+                2.0,
+                3.0,
+                4.0,
+                5.0,
+                6.0,
+                7.0,
+                8.0,
+                9.0,
+                10.0,
+                11.0,
+            ]
+
+            with pytest.raises(StopIteration):
+                run_collect_fills_loop(
+                    data_dir=data_dir,
+                    fills_path=fills_path,
+                    stale_alert_hours=6.0,
+                )
+
+            # Alert should be triggered after 3 empty cycles (>2 threshold)
+            mock_notify.assert_called()
+            # Check that the alert message mentions empty cycles
+            call_args = mock_notify.call_args[0][0]
+            assert "empty" in call_args.lower()
+
+    @patch("polymarket.fills_loop.collect_fills")
+    @patch("polymarket.fills_loop.time.sleep")
+    @patch("polymarket.fills_loop.time.time")
+    def test_empty_cycle_counter_reset_on_success(
+        self, mock_time, mock_sleep, mock_collect_fills
+    ):
+        """Test that empty cycle counter resets after successful fill."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            fills_path = data_dir / "fills.jsonl"
+
+            # Create a fresh fill
+            fill = {
+                "token_id": "test-token",
+                "side": "buy",
+                "size": "100",
+                "price": "0.5",
+                "timestamp": datetime.now(UTC).isoformat(),
+                "transaction_hash": "tx1",
+                "market_slug": "test-market",
+            }
+            fills_path.parent.mkdir(parents=True, exist_ok=True)
+            fills_path.write_text(json.dumps(fill) + "\n")
+
+            # Return empty first, then success, then exit
+            mock_collect_fills.side_effect = [
+                {
+                    "total_appended": 0,
+                    "account_fills": 0,
+                    "paper_fills": 0,
+                    "duplicates_skipped": 0,
+                    "heartbeat_logged": False,
+                },
+                {
+                    "total_appended": 5,  # Success
+                    "account_fills": 5,
+                    "paper_fills": 0,
+                    "duplicates_skipped": 0,
+                    "heartbeat_logged": False,
+                },
+            ]
+            mock_time.side_effect = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
+            mock_sleep.side_effect = [None, StopIteration()]
+
+            with pytest.raises(StopIteration):
+                run_collect_fills_loop(
+                    data_dir=data_dir,
+                    fills_path=fills_path,
+                    stale_alert_hours=6.0,
+                )
+
+            # Should have 2 calls: one empty, one successful
+            assert mock_collect_fills.call_count == 2
+
+
+class TestFailsafeCollection:
+    """Tests for fail-safe collection when fills are stale."""
+
+    @patch("polymarket.fills_loop.collect_fills")
+    @patch("polymarket.fills_loop.time.sleep")
+    @patch("polymarket.fills_loop.time.time")
+    def test_failsafe_triggered_when_stale_and_no_btc_preclose(
+        self, mock_time, mock_sleep, mock_collect_fills
+    ):
+        """Test fail-safe triggers when fills >6h stale and no btc-preclose."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            fills_path = data_dir / "fills.jsonl"
+
+            # Create a stale fill (>6h old)
+            fill = {
+                "token_id": "test-token",
+                "side": "buy",
+                "size": "100",
+                "price": "0.5",
+                "timestamp": (datetime.now(UTC) - timedelta(hours=10)).isoformat(),
+                "transaction_hash": "tx1",
+                "market_slug": "test-market",
+            }
+            fills_path.parent.mkdir(parents=True, exist_ok=True)
+            fills_path.write_text(json.dumps(fill) + "\n")
+
+            # No btc_preclose_last_run.txt file exists
+
+            mock_time.side_effect = [0.0, 1.0, 2.0, 3.0]
+            mock_collect_fills.return_value = {
+                "total_appended": 0,
+                "account_fills": 0,
+                "paper_fills": 0,
+                "duplicates_skipped": 0,
+                "heartbeat_logged": False,
+            }
+
+            with pytest.raises(StopIteration):
+                mock_sleep.side_effect = StopIteration()
+                run_collect_fills_loop(
+                    data_dir=data_dir,
+                    fills_path=fills_path,
+                    lookback_hours=72.0,
+                )
+
+            # Verify collect_fills was called with widened lookback (5x original = 360h)
+            call_kwargs = mock_collect_fills.call_args[1]
+            assert call_kwargs["lookback_hours"] == 360.0  # 72 * 5
+
+    @patch("polymarket.fills_loop.collect_fills")
+    @patch("polymarket.fills_loop.time.sleep")
+    @patch("polymarket.fills_loop.time.time")
+    def test_failsafe_not_triggered_when_btc_preclose_recent(
+        self, mock_time, mock_sleep, mock_collect_fills
+    ):
+        """Test fail-safe does NOT trigger if btc-preclose ran recently."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            fills_path = data_dir / "fills.jsonl"
+
+            # Create a stale fill (>6h old)
+            fill = {
+                "token_id": "test-token",
+                "side": "buy",
+                "size": "100",
+                "price": "0.5",
+                "timestamp": (datetime.now(UTC) - timedelta(hours=10)).isoformat(),
+                "transaction_hash": "tx1",
+                "market_slug": "test-market",
+            }
+            fills_path.parent.mkdir(parents=True, exist_ok=True)
+            fills_path.write_text(json.dumps(fill) + "\n")
+
+            # Create recent btc_preclose_last_run.txt (1 hour ago)
+            state_file = data_dir / "btc_preclose_last_run.txt"
+            state_file.write_text((datetime.now(UTC) - timedelta(hours=1)).isoformat())
+
+            mock_time.side_effect = [0.0, 1.0, 2.0, 3.0]
+            mock_collect_fills.return_value = {
+                "total_appended": 0,
+                "account_fills": 0,
+                "paper_fills": 0,
+                "duplicates_skipped": 0,
+                "heartbeat_logged": False,
+            }
+
+            with pytest.raises(StopIteration):
+                mock_sleep.side_effect = StopIteration()
+                run_collect_fills_loop(
+                    data_dir=data_dir,
+                    fills_path=fills_path,
+                    lookback_hours=72.0,
+                )
+
+            # Verify collect_fills was called with normal lookback (not 5x)
+            call_kwargs = mock_collect_fills.call_args[1]
+            assert call_kwargs["lookback_hours"] < 360.0  # Should not be 5x
